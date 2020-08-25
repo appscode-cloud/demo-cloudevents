@@ -16,7 +16,7 @@ type Example struct {
 }
 
 func main() {
-	sender, err := nats.NewSender("http://localhost:4222", "ORDERS.processed", nats.NatsOptions())
+	sender, err := nats.NewSender("nats://localhost:4222", "ORDERS.processed", nats.NatsOptions())
 	if err != nil {
 		panic(err)
 	}

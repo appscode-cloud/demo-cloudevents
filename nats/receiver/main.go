@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	con, err := nats.NewConsumer("http://localhost:4222", "ORDERS.processed", nats.NatsOptions())
+	con, err := nats.NewConsumer("nats://localhost:4222", "ORDERS.processed", nats.NatsOptions())
 	if err != nil {
 		panic(err)
 	}
