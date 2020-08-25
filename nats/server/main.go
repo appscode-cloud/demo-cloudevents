@@ -75,6 +75,7 @@ func AddConsumer(name, filter, stream string, nc *nats.Conn) (*jsm.Consumer, err
 	consumer, err := jsm.NewConsumerFromDefault(stream, jsm.DefaultConsumer, jsm.ConsumerConnection(
 		jsm.WithConnection(nc)), jsm.DurableName(name), jsm.MaxDeliveryAttempts(5),
 		jsm.AckWait(30*time.Second), jsm.AcknowledgeExplicit(), jsm.ReplayInstantly(),
+		//jsm.DeliverySubject("monitor.ORDERS"),
 		jsm.DeliverAllAvailable(), jsm.FilterStreamBySubject(filter))
 	if err != nil {
 		return nil, err

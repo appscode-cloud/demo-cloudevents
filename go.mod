@@ -17,3 +17,5 @@ require (
 	golang.org/x/sys v0.0.0-20200821140526-fda516888d29 // indirect
 	golang.org/x/time v0.0.0-20200630173020-3af7569d3a1e // indirect
 )
+
+replace github.com/cloudevents/sdk-go/protocol/nats/v2 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200825094329-0602c90b4a68
