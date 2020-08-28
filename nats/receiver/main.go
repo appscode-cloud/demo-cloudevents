@@ -6,11 +6,16 @@ import (
 
 	"github.com/cloudevents/sdk-go/protocol/nats/v2"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	natsio "github.com/nats-io/nats.go"
 	"github.com/the-redback/go-oneliners"
 )
 
 func main() {
-	con, err := nats.NewConsumer("nats://localhost:4222", "NEW", nats.NatsOptions(), nats.WithPullConsumer("ORDERS"))
+	con, err := nats.NewConsumer("nats://localhost:4222", "NEW", nats.NatsOptions(func(opts *natsio.Options) error {
+		opts.User = "admin"
+		opts.Password = "admin"
+		return nil
+	}), nats.WithPullConsumer("ORDERS"))
 	if err != nil {
 		panic(err)
 	}

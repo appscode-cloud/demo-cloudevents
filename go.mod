@@ -12,6 +12,7 @@ require (
 	github.com/nats-io/jwt/v2 v2.0.0-20200820224411-1e751ff168ab // indirect
 	github.com/nats-io/nats-server/v2 v2.1.8-0.20200821234144-9bad6725aa10
 	github.com/nats-io/nats.go v1.10.1-0.20200606002146-fc6fed82929a
+	github.com/nats-io/nkeys v0.2.0
 	github.com/the-redback/go-oneliners v0.0.0-20190417084731-74f7694e6dae
 	golang.org/x/crypto v0.0.0-20200820211705-5c72a883971a // indirect
 	golang.org/x/sys v0.0.0-20200821140526-fda516888d29 // indirect

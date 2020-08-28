@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"io/ioutil"
+	"path/filepath"
 	"time"
 
 	"github.com/nats-io/jsm.go"
@@ -15,6 +16,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer nc.Close()
 
 	stream, err := AddStream("ORDERS", nc)
 	if err != nil {
@@ -35,12 +37,18 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 	}
 
 	opts := &natsd.Options{
-		JetStream: true,
-		StoreDir:  dir,
-		Host:      "localhost",
-		Port:      4222,
-		LogFile:   "/dev/stdout",
-		Trace:     true,
+		JetStream:  true,
+		StoreDir:   dir,
+		Host:       "localhost",
+		Port:       4222,
+		LogFile:    "/dev/stdout",
+		Trace:      true,
+		ConfigFile: filepath.Join("./nats/confs/server.conf"),
+	}
+
+	err = opts.ProcessConfigFile(opts.ConfigFile)
+	if err != nil {
+		return nil, nil, err
 	}
 	s, err := natsd.NewServer(opts)
 	if err != nil {
@@ -51,7 +59,11 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 		return nil, nil, errors.New("nats server didn't start")
 	}
 
-	nc, err := nats.Connect(s.ClientURL())
+	nc, err := nats.Connect(s.ClientURL(), func(options *nats.Options) error {
+		options.User = "admin"
+		options.Password = "admin"
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}

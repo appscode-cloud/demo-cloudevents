@@ -7,6 +7,8 @@ import (
 
 	"github.com/cloudevents/sdk-go/protocol/nats/v2"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	natsio "github.com/nats-io/nats.go"
+	"github.com/nats-io/nkeys"
 	"github.com/the-redback/go-oneliners"
 )
 
@@ -16,7 +18,18 @@ type Example struct {
 }
 
 func main() {
-	sender, err := nats.NewSender("nats://localhost:4222", "ORDERS.processed", nats.NatsOptions())
+	nKeySeed := "SUAO2CSEH5NABBK5ET33BH47E3PZECUKHCFTYNF45VLOVVDFSLCBCL3S3I"
+	sender, err := nats.NewSender("nats://localhost:4222", "ORDERS.processed", nats.NatsOptions(func(opts *natsio.Options) error {
+		opts.Nkey = "UDLDMAYR42UJ5UMBIVVC5ULD4IFQWHBNJEPIFWRMNVPKGR45H476I5SA"
+		opts.SignatureCB = func(bytes []byte) ([]byte, error) {
+			sk, err := nkeys.FromSeed([]byte(nKeySeed))
+			if err != nil {
+				return nil, err
+			}
+			return sk.Sign(bytes)
+		}
+		return nil
+	}))
 	if err != nil {
 		panic(err)
 	}
