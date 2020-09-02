@@ -40,7 +40,7 @@ type Example struct {
 }
 
 func process(ctx context.Context, event cloudevents.Event) error {
-	oneliners.PrettyJson(event)
+	//oneliners.PrettyJson(event)
 	data := &Example{}
 	if err := event.DataAs(data); err != nil {
 		return err

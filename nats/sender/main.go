@@ -44,16 +44,18 @@ func main() {
 	event.SetType("com.demo-cloudevents.sent")
 	event.SetTime(time.Now())
 	event.SetSource("demo-cloudevents/nats/sender")
-	_ = event.SetData("application/json", &Example{
-		Sequence: 1,
-		Message:  "Hello, #application/json!",
-	})
+	for i := 0; i < 5; i++ {
+		_ = event.SetData("application/json", &Example{
+			Sequence: i,
+			Message:  "Hello, #application/json!",
+		})
 
-	oneliners.PrettyJson(event)
+		oneliners.PrettyJson(event)
 
-	if result := client.Send(context.Background(), event); cloudevents.IsUndelivered(result) {
-		log.Printf("failed to send: %v", err)
-	} else {
-		log.Printf("sent: %d, accepted: %t", 1, cloudevents.IsACK(result))
+		if result := client.Send(context.Background(), event); cloudevents.IsUndelivered(result) {
+			log.Printf("failed to send: %v", err)
+		} else {
+			log.Printf("sent: %d, accepted: %t", 1, cloudevents.IsACK(result))
+		}
 	}
 }

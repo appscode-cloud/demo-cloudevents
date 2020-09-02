@@ -6,13 +6,14 @@ import (
 	"time"
 )
 
-type Subscription interface {
-	Drain() error
-}
-
 // The Subscriber interface allows us to configure how the subscription is created
 type Subscriber interface {
 	Subscribe(conn *nats.Conn, subject string, cb nats.MsgHandler) (Subscription, error)
+}
+
+// The Subscription interface allows us to drain a subscription when closed
+type Subscription interface {
+	Drain() error
 }
 
 // RegularSubscriber creates regular subscriptions
@@ -51,6 +52,8 @@ func NewPullConsumer(stream string) Subscriber {
 	}
 }
 
+const defaultTimeout = 10 * time.Second
+
 // Subscribe implements Subscriber.Subscribe
 func (s *PullConsumer) Subscribe(conn *nats.Conn, consumer string, cb nats.MsgHandler) (Subscription, error) {
 	c, err := jsm.LoadConsumer(s.Stream, consumer, jsm.WithConnection(conn))
@@ -64,9 +67,13 @@ func (s *PullConsumer) Subscribe(conn *nats.Conn, consumer string, cb nats.MsgHa
 			case <-s.stopCh:
 				break
 			default:
-				msg, err := c.NextMsg(jsm.WithTimeout(5 * time.Second))
+				msg, err := c.NextMsg(jsm.WithTimeout(defaultTimeout))
+				if err == nats.ErrTimeout {
+					continue
+				}
 				if err == nil {
 					cb(msg)
+					_ = msg.Respond(nil)
 				}
 			}
 		}

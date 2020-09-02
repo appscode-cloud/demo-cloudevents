@@ -3,7 +3,7 @@ package main
 import (
 	"errors"
 	"io/ioutil"
-	"path/filepath"
+	"log"
 	"time"
 
 	"github.com/nats-io/jsm.go"
@@ -43,7 +43,7 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 		Port:       4222,
 		LogFile:    "/dev/stdout",
 		Trace:      true,
-		ConfigFile: filepath.Join("./nats/confs/server.conf"),
+		ConfigFile: "./nats/confs/server.conf",
 	}
 
 	err = opts.ProcessConfigFile(opts.ConfigFile)
@@ -58,6 +58,8 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 	if !s.ReadyForConnections(10 * time.Second) {
 		return nil, nil, errors.New("nats server didn't start")
 	}
+
+	log.Println("NATS Server with Jetstream started...")
 
 	nc, err := nats.Connect(s.ClientURL(), func(options *nats.Options) error {
 		options.User = "admin"

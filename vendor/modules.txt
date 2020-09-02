@@ -1,4 +1,4 @@
-# github.com/cloudevents/sdk-go/protocol/nats/v2 v2.2.0 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200825094329-0602c90b4a68
+# github.com/cloudevents/sdk-go/protocol/nats/v2 v2.2.0 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200831050400-1774999bfbb7
 ## explicit
 github.com/cloudevents/sdk-go/protocol/nats/v2
 # github.com/cloudevents/sdk-go/v2 v2.2.0
@@ -50,6 +50,8 @@ github.com/nats-io/jsm.go/api/jetstream/advisory
 github.com/nats-io/jsm.go/api/jetstream/metric
 github.com/nats-io/jsm.go/api/server/advisory
 github.com/nats-io/jsm.go/api/server/metric
+# github.com/nats-io/jwt v1.0.1
+## explicit
 # github.com/nats-io/jwt/v2 v2.0.0-20200820224411-1e751ff168ab
 ## explicit
 github.com/nats-io/jwt/v2
@@ -127,4 +129,4 @@ golang.org/x/sys/windows/svc/mgr
 # golang.org/x/time v0.0.0-20200630173020-3af7569d3a1e
 ## explicit
 golang.org/x/time/rate
-# github.com/cloudevents/sdk-go/protocol/nats/v2 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200825094329-0602c90b4a68
+# github.com/cloudevents/sdk-go/protocol/nats/v2 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200831050400-1774999bfbb7
