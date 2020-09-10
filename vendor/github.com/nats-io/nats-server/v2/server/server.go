@@ -218,6 +218,9 @@ type Server struct {
 
 	// Websocket structure
 	websocket srvWebsocket
+
+	// exporting account name the importer experienced issues with
+	incompleteAccExporterMap sync.Map
 }
 
 // Make sure all are 64bits for atomic use
@@ -718,6 +721,10 @@ func (s *Server) generateRouteInfoJSON() {
 func (s *Server) globalAccountOnly() bool {
 	var hasOthers bool
 
+	if len(s.trustedKeys) > 0 {
+		return false
+	}
+
 	s.mu.Lock()
 	s.accounts.Range(func(k, v interface{}) bool {
 		acc := v.(*Account)
@@ -1206,13 +1213,13 @@ func (s *Server) updateAccountWithClaimJWT(acc *Account, claimJWT string) error 
 	if acc == nil {
 		return ErrMissingAccount
 	}
-	acc.updated = time.Now()
-	if acc.claimJWT != "" && acc.claimJWT == claimJWT {
+	if acc.claimJWT != "" && acc.claimJWT == claimJWT && !acc.incomplete {
 		s.Debugf("Requested account update for [%s], same claims detected", acc.Name)
 		return ErrAccountResolverSameClaims
 	}
 	accClaims, _, err := s.verifyAccountClaims(claimJWT)
 	if err == nil && accClaims != nil {
+		acc.updated = time.Now()
 		acc.mu.Lock()
 		if acc.Issuer == "" {
 			acc.Issuer = accClaims.Issuer

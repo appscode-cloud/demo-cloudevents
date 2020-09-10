@@ -21,6 +21,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"net/http"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -587,6 +588,21 @@ func (c *client) subsAtLimit() bool {
 	return c.msubs != jwt.NoLimit && len(c.subs) >= int(c.msubs)
 }
 
+func minLimit(value *int32, limit int32) bool {
+	if *value != jwt.NoLimit {
+		if limit != jwt.NoLimit {
+			if limit < *value {
+				*value = limit
+				return true
+			}
+		}
+	} else if limit != jwt.NoLimit {
+		*value = limit
+		return true
+	}
+	return false
+}
+
 // Apply account limits
 // Lock is held on entry.
 // FIXME(dlc) - Should server be able to override here?
@@ -594,30 +610,35 @@ func (c *client) applyAccountLimits() {
 	if c.acc == nil || (c.kind != CLIENT && c.kind != LEAF) {
 		return
 	}
-
-	// Set here, will need to fo checks for NoLimit.
-	if c.acc.msubs != jwt.NoLimit {
-		c.msubs = c.acc.msubs
+	c.mpay = jwt.NoLimit
+	c.msubs = jwt.NoLimit
+	if c.opts.JWT != "" { // user jwt implies account
+		if uc, _ := jwt.DecodeUserClaims(c.opts.JWT); uc != nil {
+			c.mpay = int32(uc.Limits.Payload)
+			c.msubs = int32(uc.Limits.Subs)
+		}
 	}
-	if c.acc.mpay != jwt.NoLimit {
-		c.mpay = c.acc.mpay
-	}
-
+	minLimit(&c.mpay, c.acc.mpay)
+	minLimit(&c.msubs, c.acc.msubs)
 	s := c.srv
 	opts := s.getOpts()
-
-	// We check here if the server has an option set that is lower than the account limit.
-	if c.mpay != jwt.NoLimit && opts.MaxPayload != 0 && int32(opts.MaxPayload) < c.acc.mpay {
-		c.Errorf("Max Payload set to %d from server config which overrides %d from account claims", opts.MaxPayload, c.acc.mpay)
-		c.mpay = int32(opts.MaxPayload)
+	mPay := opts.MaxPayload
+	// options encode unlimited differently
+	if mPay == 0 {
+		mPay = jwt.NoLimit
 	}
-
-	// We check here if the server has an option set that is lower than the account limit.
-	if c.msubs != jwt.NoLimit && opts.MaxSubs != 0 && opts.MaxSubs < int(c.acc.msubs) {
-		c.Errorf("Max Subscriptions set to %d from server config which overrides %d from account claims", opts.MaxSubs, c.acc.msubs)
-		c.msubs = int32(opts.MaxSubs)
+	mSubs := int32(opts.MaxSubs)
+	if mSubs == 0 {
+		mSubs = jwt.NoLimit
 	}
-
+	wasUnlimited := c.mpay == jwt.NoLimit
+	if minLimit(&c.mpay, mPay) && !wasUnlimited {
+		c.Errorf("Max Payload set to %d from server overrides account or user config", opts.MaxPayload)
+	}
+	wasUnlimited = c.msubs == jwt.NoLimit
+	if minLimit(&c.msubs, mSubs) && !wasUnlimited {
+		c.Errorf("Max Subscriptions set to %d from server overrides account or user config", opts.MaxSubs)
+	}
 	if c.subsAtLimit() {
 		go func() {
 			c.maxSubsExceeded()
@@ -1519,6 +1540,10 @@ func (c *client) processConnect(arg []byte) error {
 	// If websocket client and JWT not in the CONNECT, use the cookie JWT (possibly empty).
 	if ws := c.ws; ws != nil && c.opts.JWT == "" {
 		c.opts.JWT = ws.cookieJwt
+	}
+	// when not in operator mode, discard the jwt
+	if srv != nil && srv.trustedKeys == nil {
+		c.opts.JWT = ""
 	}
 	ujwt := c.opts.JWT
 
@@ -3346,8 +3371,8 @@ func (c *client) handleGWReplyMap(msg []byte) bool {
 }
 
 // Used to setup the response map for a service import request that has a reply subject.
-func (c *client) setupResponseServiceImport(acc *Account, si *serviceImport) *serviceImport {
-	rsi := si.acc.addRespServiceImport(acc, string(c.pa.reply), si)
+func (c *client) setupResponseServiceImport(acc *Account, si *serviceImport, tracking bool, header http.Header) *serviceImport {
+	rsi := si.acc.addRespServiceImport(acc, string(c.pa.reply), si, tracking, header)
 	if si.latency != nil {
 		if c.rtt == 0 {
 			// We have a service import that we are tracking but have not established RTT.
@@ -3380,22 +3405,17 @@ func (c *client) processServiceImport(si *serviceImport, acc *Account, msg []byt
 
 	// Check if there is a reply present and set up a response.
 	// TODO(dlc) - restrict to configured service imports and not responses?
+	tracking, headers := shouldSample(si.latency, c)
 	if len(c.pa.reply) > 0 {
-		rsi = c.setupResponseServiceImport(acc, si)
+		rsi = c.setupResponseServiceImport(acc, si, tracking, headers)
 		if rsi != nil {
 			nrr = []byte(rsi.from)
 		}
-	}
-
-	// Pick correct to subject. If we matched on a wildcard use the literal publish subject.
-	to := si.to
-	if si.hasWC {
-		to = string(c.pa.subject)
-	}
-
-	// Check to see if this was a bad request with no reply and we were supposed to be tracking.
-	if !si.response && si.latency != nil && len(c.pa.reply) == 0 && shouldSample(si.latency) {
-		si.acc.sendBadRequestTrackingLatency(si, c)
+	} else {
+		// Check to see if this was a bad request with no reply and we were supposed to be tracking.
+		if !si.response && si.latency != nil && tracking {
+			si.acc.sendBadRequestTrackingLatency(si, c, headers)
+		}
 	}
 
 	// Send tracking info here if we are tracking this response.
@@ -3403,6 +3423,12 @@ func (c *client) processServiceImport(si *serviceImport, acc *Account, msg []byt
 	var didSendTL bool
 	if si.tracking {
 		didSendTL = acc.sendTrackingLatency(si, c)
+	}
+
+	// Pick correct to subject. If we matched on a wildcard use the literal publish subject.
+	to := si.to
+	if si.hasWC {
+		to = string(c.pa.subject)
 	}
 
 	// FIXME(dlc) - Do L1 cache trick like normal client?

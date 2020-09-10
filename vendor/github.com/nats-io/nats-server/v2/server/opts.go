@@ -1455,8 +1455,9 @@ func parseLeafNodes(v interface{}, opts *Options, errors *[]error, warnings *[]e
 			}
 		case "remotes":
 			// Parse the remote options here.
-			remotes, err := parseRemoteLeafNodes(mv, errors, warnings)
+			remotes, err := parseRemoteLeafNodes(tk, errors, warnings)
 			if err != nil {
+				*errors = append(*errors, err)
 				continue
 			}
 			opts.LeafNode.Remotes = remotes
@@ -1612,7 +1613,6 @@ func parseLeafUsers(mv interface{}, errors *[]error, warnings *[]error) ([]*User
 func parseRemoteLeafNodes(v interface{}, errors *[]error, warnings *[]error) ([]*RemoteLeafOpts, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	ra, ok := v.([]interface{})
 	if !ok {
@@ -1647,6 +1647,9 @@ func parseRemoteLeafNodes(v interface{}, errors *[]error, warnings *[]error) ([]
 						continue
 					}
 					remote.URLs = append(remote.URLs, url)
+				default:
+					*errors = append(*errors, &configErr{tk, fmt.Sprintf("Expected remote leafnode url to be an array or string, got %v", v)})
+					continue
 				}
 			case "account", "local":
 				remote.LocalAccount = v.(string)
@@ -2415,7 +2418,7 @@ func parseServiceLatency(root token, v interface{}) (l *serviceLatency, retErr e
 	// Read sampling value.
 	if v, ok := latency["sampling"]; ok {
 		tk, v := unwrapValue(v, &lt)
-
+		header := false
 		var sample int64
 		switch vv := v.(type) {
 		case int64:
@@ -2423,6 +2426,11 @@ func parseServiceLatency(root token, v interface{}) (l *serviceLatency, retErr e
 			sample = vv
 		case string:
 			// Sample is a string, like "50%".
+			if strings.ToLower(strings.TrimSpace(vv)) == "headers" {
+				header = true
+				sample = 0
+				break
+			}
 			s := strings.TrimSuffix(vv, "%")
 			n, err := strconv.Atoi(s)
 			if err != nil {
@@ -2434,9 +2442,11 @@ func parseServiceLatency(root token, v interface{}) (l *serviceLatency, retErr e
 			return nil, &configErr{token: tk,
 				reason: fmt.Sprintf("Expected latency sample to be a string or map/struct, got %T", v)}
 		}
-		if sample < 1 || sample > 100 {
-			return nil, &configErr{token: tk,
-				reason: ErrBadSampling.Error()}
+		if !header {
+			if sample < 1 || sample > 100 {
+				return nil, &configErr{token: tk,
+					reason: ErrBadSampling.Error()}
+			}
 		}
 
 		sl.sampling = int8(sample)

@@ -98,20 +98,20 @@ NKEYs are sensitive and should be treated as secrets.
 }
 
 var userConfigRE = regexp.MustCompile(`\s*(?:(?:[-]{3,}.*[-]{3,}\r?\n)([\w\-.=]+)(?:\r?\n[-]{3,}.*[-]{3,}\r?\n))`)
+/*
+An user config file looks like this:
+ -----BEGIN NATS USER JWT-----
+ eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5...
+ ------END NATS USER JWT------
 
-// An user config file looks like this:
-//  -----BEGIN NATS USER JWT-----
-//  eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5...
-//  ------END NATS USER JWT------
-//
-//  ************************* IMPORTANT *************************
-//  NKEY Seed printed below can be used sign and prove identity.
-//  NKEYs are sensitive and should be treated as secrets.
-//
-//  -----BEGIN USER NKEY SEED-----
-//  SUAIO3FHUX5PNV2LQIIP7TZ3N4L7TX3W53MQGEIVYFIGA635OZCKEYHFLM
-//  ------END USER NKEY SEED------
+ ************************* IMPORTANT *************************
+ NKEY Seed printed below can be used sign and prove identity.
+ NKEYs are sensitive and should be treated as secrets.
 
+ -----BEGIN USER NKEY SEED-----
+ SUAIO3FHUX5PNV2LQIIP7TZ3N4L7TX3W53MQGEIVYFIGA635OZCKEYHFLM
+ ------END USER NKEY SEED------
+*/
 // FormatUserConfig returns a decorated file with a decorated JWT and decorated seed
 func FormatUserConfig(jwtString string, seed []byte) ([]byte, error) {
 	gc, err := Decode(jwtString)

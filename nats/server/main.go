@@ -22,10 +22,14 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	_, err = AddConsumer("NEW", "ORDERS.processed", stream.Name(), nc)
-	if err != nil {
-		panic(err)
-	}
+	log.Printf("A stream named `%s` has been created", stream.Name())
+	//
+	//consumer, err := AddConsumer("NEW", "ORDERS.processed", stream.Name(), nc)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//log.Printf("A consumer named `%s` has been created", consumer.Name())
+
 	var done chan bool
 	<-done
 }
@@ -50,6 +54,12 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	//oneliners.PrettyJson(opts, "opts")
+	//oneliners.PrettyJson(opts.Users, "Users")
+	//oneliners.PrettyJson(opts.Nkeys, "NKeys")
+	//oneliners.PrettyJson(opts.Accounts, "Accounts")
+	//oneliners.PrettyJson(opts.SystemAccount, "SystemAccount")
+	//spew.Dump(opts.Accounts)
 	s, err := natsd.NewServer(opts)
 	if err != nil {
 		return nil, nil, err
@@ -69,6 +79,7 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	log.Println("Connection to nats server established")
 
 	return s, nc, nil
 }
