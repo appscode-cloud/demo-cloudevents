@@ -3,27 +3,63 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"time"
 
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
+
+	"github.com/masudur-rahman/demo-cloudevents"
+	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
 )
 
+var (
+	// This matches ./configs/nkeys_jwts/test.seed
+	oSeed = []byte("SOAFYNORQLQFJYBYNUGC5D7SH2MXMUX5BFEWWGHN3EK4VGG5TPT5DZP7QU")
+	// This matches ./configs/nkeys/op.jwt
+	oJwt = "eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJhdWQiOiJURVNUUyIsImV4cCI6MTg1OTEyMTI3NSwianRpIjoiWE5MWjZYWVBIVE1ESlFSTlFPSFVPSlFHV0NVN01JNVc1SlhDWk5YQllVS0VRVzY3STI1USIsImlhdCI6MTU0Mzc2MTI3NSwiaXNzIjoiT0NBVDMzTVRWVTJWVU9JTUdOR1VOWEo2NkFIMlJMU0RBRjNNVUJDWUFZNVFNSUw2NU5RTTZYUUciLCJuYW1lIjoiU3luYWRpYSBDb21tdW5pY2F0aW9ucyBJbmMuIiwibmJmIjoxNTQzNzYxMjc1LCJzdWIiOiJPQ0FUMzNNVFZVMlZVT0lNR05HVU5YSjY2QUgyUkxTREFGM01VQkNZQVk1UU1JTDY1TlFNNlhRRyIsInR5cGUiOiJvcGVyYXRvciIsIm5hdHMiOnsic2lnbmluZ19rZXlzIjpbIk9EU0tSN01ZRlFaNU1NQUo2RlBNRUVUQ1RFM1JJSE9GTFRZUEpSTUFWVk40T0xWMllZQU1IQ0FDIiwiT0RTS0FDU1JCV1A1MzdEWkRSVko2NTdKT0lHT1BPUTZLRzdUNEhONk9LNEY2SUVDR1hEQUhOUDIiLCJPRFNLSTM2TFpCNDRPWTVJVkNSNlA1MkZaSlpZTVlXWlZXTlVEVExFWjVUSzJQTjNPRU1SVEFCUiJdfX0.hyfz6E39BMUh0GLzovFfk3wT4OfualftjdJ_eYkLfPvu5tZubYQ_Pn9oFYGCV_6yKy3KMGhWGUCyCdHaPhalBw"
+	oKp  nkeys.KeyPair
+)
+
+func init() {
+	var err error
+	oKp, err = nkeys.FromSeed(oSeed)
+	if err != nil {
+		panic(fmt.Sprintf("Parsing oSeed failed with: %v", err))
+	}
+}
+
 func main() {
-	oKp, _, _, _, err := CreateOperator("KO")
+	println(demo_cloudevents.BaseDirectory, "\n")
+	//oKp, _, _, oJwt, err := CreateOperator("KO")
+	//if err != nil {
+	//	panic(err)
+	//}
+	sKp, _, _, err := CreateAccount("SYS", oKp)
 	if err != nil {
 		panic(err)
 	}
-	aKp, _, _, err := CreateAccount("SYS", oKp)
+	_, sPub, sJwt, sCreds, err := CreateUser("system_user", sKp)
 	if err != nil {
 		panic(err)
 	}
-	_, _, uJwt, uCreds, err := CreateUser("system_user", aKp)
+	if err = ioutil.WriteFile(confs.SysCredFile, []byte(sCreds), 0666); err != nil {
+		panic(err)
+	}
+
+	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`listen: -1
+jetstream: {max_mem_store: 10Mb, max_file_store: 10Mb}
+operator: %s
+resolver: {
+	type: full
+	dir: %s
+}
+system_account: %s`, oJwt, confs.ConfDir, sPub)), 0666)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println(uJwt, "\n\n", string(uCreds))
+	fmt.Println(sJwt, "\n\n", string(sCreds))
 }
 
 func CreateOperator(name string) (nkeys.KeyPair, string, []byte, string, error) {
@@ -40,7 +76,22 @@ func CreateOperator(name string) (nkeys.KeyPair, string, []byte, string, error) 
 	if err != nil {
 		return nil, "", nil, "", err
 	}
-	claim := jwt.NewOperatorClaims(oPub)
+	claim := jwt.OperatorClaims{
+		ClaimsData: jwt.ClaimsData{
+			Audience:  oPub,
+			Expires:   time.Now().Add(24 * time.Hour).Unix(),
+			ID:        oPub,
+			IssuedAt:  time.Now().Unix(),
+			Issuer:    "Masudur Rahman",
+			Name:      oPub,
+			NotBefore: time.Now().Unix(),
+			Subject:   oPub,
+		},
+		Operator: jwt.Operator{
+			SigningKeys: jwt.StringList{oPub},
+		},
+	}
+	//claim := jwt.NewOperatorClaims(oPub)
 	claim.Name = name
 	oJwt, err := claim.Encode(oKp)
 	if err != nil {

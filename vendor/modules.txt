@@ -55,7 +55,7 @@ github.com/nats-io/jwt
 # github.com/nats-io/jwt/v2 v2.0.0-20200827232814-292806fa48ba
 ## explicit
 github.com/nats-io/jwt/v2
-# github.com/nats-io/nats-server/v2 v2.1.8-0.20200821234144-9bad6725aa10 => ../../../github.com/nats-io/nats-server
+# github.com/nats-io/nats-server/v2 v2.1.8-0.20200911161627-53ff94c75004
 ## explicit
 github.com/nats-io/nats-server/v2/conf
 github.com/nats-io/nats-server/v2/internal/ldap
@@ -129,4 +129,3 @@ golang.org/x/sys/windows/svc/mgr
 ## explicit
 golang.org/x/time/rate
 # github.com/cloudevents/sdk-go/protocol/nats/v2 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200831050400-1774999bfbb7
-# github.com/nats-io/nats-server/v2 => ../../../github.com/nats-io/nats-server

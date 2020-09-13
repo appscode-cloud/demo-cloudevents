@@ -2,13 +2,16 @@ package main
 
 import (
 	"errors"
-	"io/ioutil"
 	"log"
 	"time"
+
+	"github.com/the-redback/go-oneliners"
 
 	"github.com/nats-io/jsm.go"
 	natsd "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+
+	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
 )
 
 func main() {
@@ -18,11 +21,11 @@ func main() {
 	}
 	defer nc.Close()
 
-	stream, err := AddStream("ORDERS", nc)
-	if err != nil {
-		panic(err)
-	}
-	log.Printf("A stream named `%s` has been created", stream.Name())
+	//stream, err := AddStream("ORDERS", nc)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//log.Printf("A stream named `%s` has been created", stream.Name())
 	//
 	//consumer, err := AddConsumer("NEW", "ORDERS.processed", stream.Name(), nc)
 	//if err != nil {
@@ -35,30 +38,27 @@ func main() {
 }
 
 func StartJSServer() (*natsd.Server, *nats.Conn, error) {
-	dir, err := ioutil.TempDir("", "nats-jetstream-*")
-	if err != nil {
-		return nil, nil, err
-	}
-
 	opts := &natsd.Options{
 		JetStream:  true,
-		StoreDir:   dir,
+		StoreDir:   confs.ConfDir,
 		Host:       "localhost",
 		Port:       4222,
 		LogFile:    "/dev/stdout",
 		Trace:      true,
-		ConfigFile: "./nats/confs/server.conf",
+		ConfigFile: confs.ServerConfigFile,
 	}
 
-	err = opts.ProcessConfigFile(opts.ConfigFile)
+	opts, err := natsd.ProcessConfigFile(opts.ConfigFile)
+	//err := opts.ProcessConfigFile(opts.ConfigFile)
 	if err != nil {
 		return nil, nil, err
 	}
-	//oneliners.PrettyJson(opts, "opts")
-	//oneliners.PrettyJson(opts.Users, "Users")
-	//oneliners.PrettyJson(opts.Nkeys, "NKeys")
-	//oneliners.PrettyJson(opts.Accounts, "Accounts")
-	//oneliners.PrettyJson(opts.SystemAccount, "SystemAccount")
+	oneliners.PrettyJson(opts, "opts")
+	oneliners.PrettyJson(opts.Users, "Users")
+	oneliners.PrettyJson(opts.Nkeys, "NKeys")
+	oneliners.PrettyJson(opts.Accounts, "Accounts")
+	oneliners.PrettyJson(opts.SystemAccount, "SystemAccount")
+	oneliners.PrettyJson(opts.TrustedOperators, "TrustedOperators")
 	//spew.Dump(opts.Accounts)
 	s, err := natsd.NewServer(opts)
 	if err != nil {
@@ -71,11 +71,11 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 
 	log.Println("NATS Server with Jetstream started...")
 
-	nc, err := nats.Connect(s.ClientURL(), func(options *nats.Options) error {
+	nc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(confs.SysCredFile)) /*func(options *nats.Options) error {
 		options.User = "admin"
 		options.Password = "admin"
 		return nil
-	})
+	}*/
 	if err != nil {
 		return nil, nil, err
 	}
