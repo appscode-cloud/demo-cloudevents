@@ -1,7 +1,8 @@
-package main
+package server
 
 import (
 	"errors"
+	"io/ioutil"
 	"log"
 	"time"
 
@@ -21,11 +22,11 @@ func main() {
 	}
 	defer nc.Close()
 
-	//stream, err := AddStream("ORDERS", nc)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//log.Printf("A stream named `%s` has been created", stream.Name())
+	stream, err := AddStream("ORDERS", nc)
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("A stream named `%s` has been created", stream.Name())
 	//
 	//consumer, err := AddConsumer("NEW", "ORDERS.processed", stream.Name(), nc)
 	//if err != nil {
@@ -38,9 +39,14 @@ func main() {
 }
 
 func StartJSServer() (*natsd.Server, *nats.Conn, error) {
+	dir, err := ioutil.TempDir("", "nats-jetstream-*")
+	if err != nil {
+		return nil, nil, err
+	}
+
 	opts := &natsd.Options{
 		JetStream:  true,
-		StoreDir:   confs.ConfDir,
+		StoreDir:   dir,
 		Host:       "localhost",
 		Port:       4222,
 		LogFile:    "/dev/stdout",
@@ -48,7 +54,7 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 		ConfigFile: confs.ServerConfigFile,
 	}
 
-	opts, err := natsd.ProcessConfigFile(opts.ConfigFile)
+	opts, err = natsd.ProcessConfigFile(opts.ConfigFile)
 	//err := opts.ProcessConfigFile(opts.ConfigFile)
 	if err != nil {
 		return nil, nil, err

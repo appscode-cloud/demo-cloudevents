@@ -1,10 +1,19 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
+	"net/http"
+	"path/filepath"
 	"time"
+
+	"github.com/nats-io/nats.go"
+
+	"github.com/masudur-rahman/demo-cloudevents/nats/server"
 
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
@@ -14,11 +23,8 @@ import (
 )
 
 var (
-	// This matches ./configs/nkeys_jwts/test.seed
-	oSeed = []byte("SOAFYNORQLQFJYBYNUGC5D7SH2MXMUX5BFEWWGHN3EK4VGG5TPT5DZP7QU")
-	// This matches ./configs/nkeys/op.jwt
-	oJwt = "eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJhdWQiOiJURVNUUyIsImV4cCI6MTg1OTEyMTI3NSwianRpIjoiWE5MWjZYWVBIVE1ESlFSTlFPSFVPSlFHV0NVN01JNVc1SlhDWk5YQllVS0VRVzY3STI1USIsImlhdCI6MTU0Mzc2MTI3NSwiaXNzIjoiT0NBVDMzTVRWVTJWVU9JTUdOR1VOWEo2NkFIMlJMU0RBRjNNVUJDWUFZNVFNSUw2NU5RTTZYUUciLCJuYW1lIjoiU3luYWRpYSBDb21tdW5pY2F0aW9ucyBJbmMuIiwibmJmIjoxNTQzNzYxMjc1LCJzdWIiOiJPQ0FUMzNNVFZVMlZVT0lNR05HVU5YSjY2QUgyUkxTREFGM01VQkNZQVk1UU1JTDY1TlFNNlhRRyIsInR5cGUiOiJvcGVyYXRvciIsIm5hdHMiOnsic2lnbmluZ19rZXlzIjpbIk9EU0tSN01ZRlFaNU1NQUo2RlBNRUVUQ1RFM1JJSE9GTFRZUEpSTUFWVk40T0xWMllZQU1IQ0FDIiwiT0RTS0FDU1JCV1A1MzdEWkRSVko2NTdKT0lHT1BPUTZLRzdUNEhONk9LNEY2SUVDR1hEQUhOUDIiLCJPRFNLSTM2TFpCNDRPWTVJVkNSNlA1MkZaSlpZTVlXWlZXTlVEVExFWjVUSzJQTjNPRU1SVEFCUiJdfX0.hyfz6E39BMUh0GLzovFfk3wT4OfualftjdJ_eYkLfPvu5tZubYQ_Pn9oFYGCV_6yKy3KMGhWGUCyCdHaPhalBw"
-	oKp  nkeys.KeyPair
+	oSeed = []byte("SOALXOSOXLRUB2O7YGXSPKRYRTANGHZ5IUWEZ7W3USHHMS42RPMCW4M5QI")
+	oKp   nkeys.KeyPair
 )
 
 func init() {
@@ -31,15 +37,21 @@ func init() {
 
 func main() {
 	println(demo_cloudevents.BaseDirectory, "\n")
-	//oKp, _, _, oJwt, err := CreateOperator("KO")
+	//oKp, _, oSeed, oJwt, err := CreateOperator("KO")
 	//if err != nil {
 	//	panic(err)
 	//}
-	sKp, _, _, err := CreateAccount("SYS", oKp)
+	//fmt.Println(string(oSeed))
+	//if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "KO.jwt"), []byte(oJwt), 0666); err != nil {
+	//	panic(err)
+	//}
+	//return
+
+	sKp, sPub, _, err := CreateAccount("SYS", oKp)
 	if err != nil {
 		panic(err)
 	}
-	_, sPub, sJwt, sCreds, err := CreateUser("system_user", sKp)
+	_, _, _, sCreds, err := CreateUser("sys", sKp)
 	if err != nil {
 		panic(err)
 	}
@@ -47,19 +59,76 @@ func main() {
 		panic(err)
 	}
 
-	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`listen: -1
+	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`//listen: -1
 jetstream: {max_mem_store: 10Mb, max_file_store: 10Mb}
+host: localhost
+port: 4222
 operator: %s
-resolver: {
-	type: full
-	dir: %s
-}
-system_account: %s`, oJwt, confs.ConfDir, sPub)), 0666)
+resolver: URL(http://localhost:9090/jwt/v1/accounts/)
+//resolver: {
+//	type: full
+//	dir: %s
+//}
+system_account: %s`, filepath.Join(confs.ConfDir, "KO.jwt"), confs.ConfDir, sPub)), 0666)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println(sJwt, "\n\n", string(sCreds))
+	aKp, aPub, _, err := CreateAccount("A", oKp)
+	if err != nil {
+		panic(err)
+	}
+	claim := jwt.NewAccountClaims(aPub)
+	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 3, Consumer: 4}
+	aJwt, err := claim.Encode(oKp)
+	if err != nil {
+		panic(err)
+	}
+	_, _, _, aCreds, err := CreateUser("a", aKp)
+	if err != nil {
+		panic(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "a.creds"), aCreds, 0666); err != nil {
+		panic(err)
+	}
+
+	s, c, err := server.StartJSServer()
+	if err != nil {
+		panic(err)
+	}
+
+	if msg, err := c.Request(fmt.Sprintf("$SYS.ACCOUNT.%s.CLAIMS.UPDATE", aPub), []byte(aJwt), 10*time.Second); err != nil {
+		panic(err)
+	} else {
+		content := make(map[string]interface{})
+		if err := json.Unmarshal(msg.Data, &content); err != nil {
+			panic(err)
+		} else if _, ok := content["data"]; !ok {
+			panic(err)
+		}
+	}
+	fmt.Println("Account jwt updated")
+	fmt.Println(s.ClientURL())
+	nc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")), nats.ReconnectWait(200*time.Millisecond))
+	if err != nil {
+		panic(err)
+	}
+
+	stream, err := server.AddStream("ORDERS", nc)
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("A stream named `%s` has been created", stream.Name())
+
+	consumer, err := server.AddConsumer("NEW", "ORDERS.processed", stream.Name(), nc)
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("A consumer named `%s` has been created", consumer.Name())
+
+	//fmt.Println(sJwt, "\n\n", string(sCreds))
+	var done chan bool
+	<-done
 }
 
 func CreateOperator(name string) (nkeys.KeyPair, string, []byte, string, error) {
@@ -188,4 +257,14 @@ func User() (*jwt.AccountClaims, error) {
 	})
 
 	return account, nil
+}
+
+func PushAccount(u string, data []byte) error {
+	resp, err := http.Post(u, "application/jwt", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	//message, err := ioutil.ReadAll(resp.Body)
+	return nil
 }

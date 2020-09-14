@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -64,18 +63,15 @@ func main() {
 		panic(err)
 	}
 
-	dir, err := ioutil.TempDir("", "srv")
-	handleError(err)
-	defer os.RemoveAll(dir)
-
-	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`listen: -1
-	jetstream: {max_mem_store: 10Mb, max_file_store: 10Mb}
-	operator: %s
-	resolver: {
-		type: full
-		dir: %s
-	}
-	system_account: %s`, ojwt, dir, sysPub)), 0666)
+	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(` listen: -1
+jetstream: {max_mem_store: 10Mb, max_file_store: 10Mb}
+operator: %s
+resolver: {
+	type: full
+	dir: %s
+}
+system_account: %s
+`, ojwt, confs.ConfDir, sysPub)), 0666)
 	opts, err := natsd.ProcessConfigFile(confs.ServerConfigFile)
 	handleError(err)
 	s, err := natsd.NewServer(opts)
