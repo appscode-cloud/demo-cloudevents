@@ -1,49 +1,42 @@
 package main
 
 import (
-	"errors"
 	"log"
-	"time"
+
+	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
 
 	natsd "github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
+	server "github.com/nats-io/nats-streaming-server/server"
 )
 
 func main() {
-	_, nc, err := StartNATSServer()
+	_, err := StartNATSServer()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	defer nc.Close()
 
 	var done chan bool
 	<-done
 }
 
-func StartNATSServer() (*natsd.Server, *nats.Conn, error) {
+func StartNATSServer() (*server.StanServer, error) {
 	opts := &natsd.Options{
-		Host:    "localhost",
-		Port:    4222,
-		LogFile: "/dev/stdout",
-		Trace:   true,
+		Host:       "localhost",
+		Port:       4222,
+		LogFile:    "/dev/stdout",
+		Trace:      true,
+		ConfigFile: confs.ServerConfigFile,
 	}
 
-	s, err := natsd.NewServer(opts)
+	opts, err := natsd.ProcessConfigFile(opts.ConfigFile)
 	if err != nil {
-		return nil, nil, err
-	}
-	go s.Start()
-	if !s.ReadyForConnections(10 * time.Second) {
-		return nil, nil, errors.New("nats server didn't start")
+		return nil, err
 	}
 
-	log.Println("NATS Server started...")
-
-	nc, err := nats.Connect(s.ClientURL())
+	srv, err := server.Run(server.GetDefaultOptions(), opts)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	log.Println("Connection to nats server established")
 
-	return s, nc, nil
+	return srv, nil
 }
