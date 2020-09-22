@@ -3,10 +3,12 @@ module github.com/masudur-rahman/demo-cloudevents/nats/v2
 go 1.14
 
 require (
-	github.com/masudur-rahman/demo-cloudevents v0.0.0-20200914133623-55b0f218d582
+	github.com/google/go-cmp v0.4.1 // indirect
+	github.com/nats-io/jwt v1.0.1
 	github.com/nats-io/nats-server/v2 v2.1.8
-	github.com/nats-io/nats-streaming-server v0.18.0
 	github.com/nats-io/nats.go v1.10.1-0.20200606002146-fc6fed82929a
-	github.com/nats-io/stan.go v0.7.0
+	github.com/nats-io/nkeys v0.2.0
+	golang.org/x/crypto v0.0.0-20200820211705-5c72a883971a // indirect
 	golang.org/x/sys v0.0.0-20200917073148-efd3b9a0ff20 // indirect
+	google.golang.org/protobuf v1.24.0 // indirect
 )

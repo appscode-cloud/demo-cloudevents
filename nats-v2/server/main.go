@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"time"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
-
+	"github.com/masudur-rahman/demo-cloudevents/nats/v2/confs"
+	"github.com/nats-io/jwt"
 	natsd "github.com/nats-io/nats-server/v2/server"
-	server "github.com/nats-io/nats-streaming-server/server"
 )
 
 func main() {
@@ -19,7 +25,16 @@ func main() {
 	<-done
 }
 
-func StartNATSServer() (*server.StanServer, error) {
+func StartNATSServer() (*natsd.Server, error) {
+	if err := PushAccount(filepath.Join(confs.ConfDir, "SYS.jwt")); err != nil {
+		return nil, err
+	}
+	if err := PushAccount(filepath.Join(confs.ConfDir, "B.jwt")); err != nil {
+		return nil, err
+	}
+	if err := PushAccount(filepath.Join(confs.ConfDir, "A.jwt")); err != nil {
+		return nil, err
+	}
 	opts := &natsd.Options{
 		Host:       "localhost",
 		Port:       4222,
@@ -33,10 +48,43 @@ func StartNATSServer() (*server.StanServer, error) {
 		return nil, err
 	}
 
-	srv, err := server.Run(server.GetDefaultOptions(), opts)
+	srv, err := natsd.NewServer(opts)
 	if err != nil {
 		return nil, err
 	}
+	go srv.Start()
+	if !srv.ReadyForConnections(10 * time.Second) {
+		return nil, errors.New("nats server didn't start")
+	}
+
+	log.Println("NATS Server 2.0 started...")
+	//srv, err := server.Run(server.GetDefaultOptions(), opts)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	return srv, nil
+}
+
+func PushAccount(file string) error {
+	data, err := ioutil.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	c, err := jwt.DecodeAccountClaims(string(data))
+	if err != nil {
+		return err
+	}
+	u := url.URL{
+		Scheme: "http",
+		Host:   "localhost:9090",
+		Path:   filepath.Join("/jwt/v1/accounts/", c.Subject),
+	}
+	resp, err := http.Post(u.String(), "application/jwt", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	//message, err := ioutil.ReadAll(resp.Body)
+	return nil
 }

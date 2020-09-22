@@ -47,7 +47,7 @@ func main() {
 	if err := ioutil.WriteFile(filepath.Join(confs.ConfDir, "KO.jwt"), []byte(oJwt), 0666); err != nil {
 		panic(err)
 	}
-	return
+	//return
 
 	sKp, sPub, _, err := CreateAccount("SYS", oKp)
 	if err != nil {
