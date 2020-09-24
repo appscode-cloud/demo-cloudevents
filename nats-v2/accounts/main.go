@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -31,46 +32,42 @@ func init() {
 
 func main() {
 	fmt.Println(confs.ConfDir)
-	//oKp, _, oSeed, oJwt, err := CreateOperator("KO")
-	//if err != nil {
-	//	panic(err)
-	//}
-	//fmt.Println(string(oSeed))
-	//if err := ioutil.WriteFile(filepath.Join(confs.ConfDir, "KO.jwt"), []byte(oJwt), 0666); err != nil {
-	//	panic(err)
-	//}
-	////return
-	//
-	//sKp, sPub, sJwt, err := CreateAccount("SYS", oKp)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//
-	//if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "SYS.jwt"), []byte(sJwt), 0666); err != nil {
-	//	panic(err)
-	//}
-	//_, _, _, sCreds, err := CreateUser("sys", sKp)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//if err = ioutil.WriteFile(confs.SysCredFile, []byte(sCreds), 0666); err != nil {
-	//	panic(err)
-	//}
-	//
-	//err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(` host: localhost
-	//port: 4222
-	//operator: %s
-	//resolver: URL(http://localhost:9090/jwt/v1/accounts/)
-	////resolver: {
-	////	type: full
-	////	dir: %s
-	////}
-	//system_account: %s`, filepath.Join(confs.ConfDir, "KO.jwt"), confs.ConfDir, sPub)), 0666)
-	//if err != nil {
-	//	panic(err)
-	//}
+	oKp, _, oSeed, oJwt, err := CreateOperator("KO")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(oSeed))
+	if err := ioutil.WriteFile(confs.OpJwtPath, []byte(oJwt), 0666); err != nil {
+		panic(err)
+	}
+	//return
 
-	aKp, _, aJwt, err := CreateAccount("A", oKp)
+	sKp, sPub, sJwt, err := CreateAccount("SYS", oKp)
+	if err != nil {
+		panic(err)
+	}
+
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "SYS.jwt"), []byte(sJwt), 0666); err != nil {
+		panic(err)
+	}
+	_, _, _, sCreds, err := CreateUser("sys", sKp)
+	if err != nil {
+		panic(err)
+	}
+	if err = ioutil.WriteFile(confs.SysCredFile, []byte(sCreds), 0666); err != nil {
+		panic(err)
+	}
+
+	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`host: localhost
+port: 2224
+operator: %s
+resolver: URL(http://localhost:9090/jwt/v1/accounts/)
+system_account: %s`, confs.OpJwtPath, sPub)), 0666)
+	if err != nil {
+		panic(err)
+	}
+
+	aKp, aPub, aJwt, err := CreateAccount("A", oKp)
 	if err != nil {
 		panic(err)
 	}
@@ -80,10 +77,16 @@ func main() {
 	}
 	claim.Exports = jwt.Exports{
 		&jwt.Export{
-			Name:    "Notifications",
-			Subject: "Notifications",
+			Name:    "Events",
+			Subject: "Events",
 			Type:    jwt.Stream,
-			//TokenReq: true,
+		},
+		&jwt.Export{
+			Name:         "Notifications",
+			Subject:      "Notifications",
+			Type:         jwt.Service,
+			TokenReq:     false,
+			ResponseType: jwt.ResponseTypeStream,
 		},
 	}
 	aJwt, err = claim.Encode(oKp)
@@ -101,42 +104,47 @@ func main() {
 		panic(err)
 	}
 
-	bKp, _, bJwt, err := CreateAccount("B", oKp)
+	AKp, _, AJwt, err := CreateAccount("Admin", oKp)
 	if err != nil {
 		panic(err)
 	}
-	claim, err = jwt.DecodeAccountClaims(bJwt)
+	claim, err = jwt.DecodeAccountClaims(AJwt)
 	if err != nil {
-		panic(err)
-	}
-	claim.Imports = jwt.Imports{
-		&jwt.Import{
-			Name:    "Notifications",
-			Subject: "Notifications",
-			Account: "A",
-			To:      "a",
-			Type:    jwt.Stream,
-		},
-	}
-	claim.Imports[0].Account, err = aKp.PublicKey()
-	if err != nil {
-		panic(err)
-	}
-	bJwt, err = claim.Encode(oKp)
-	if err != nil {
-		panic(err)
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "B.jwt"), []byte(bJwt), 0666); err != nil {
-		panic(err)
-	}
-	_, _, _, bCreds, err := CreateUser("b", bKp)
-	if err != nil {
-		panic(err)
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "b.creds"), bCreds, 0666); err != nil {
 		panic(err)
 	}
 
+	claim.Imports = jwt.Imports{
+		&jwt.Import{
+			Name:    "Events",
+			Subject: "Events",
+			Account: aPub,
+			To:      "a",
+			Type:    jwt.Stream,
+		},
+		&jwt.Import{
+			Name:    "Notifications",
+			Subject: "Notifications",
+			Account: aPub,
+			To:      "a.Notifications",
+			Type:    jwt.Service,
+		},
+	}
+	AJwt, err = claim.Encode(oKp)
+	if err != nil {
+		panic(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.jwt"), []byte(AJwt), 0666); err != nil {
+		panic(err)
+	}
+	_, _, _, ACreds, err := CreateUser("admin", AKp)
+	if err != nil {
+		panic(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.creds"), ACreds, 0666); err != nil {
+		panic(err)
+	}
+
+	log.Println("Everything is perfectly done, I guess...")
 }
 
 func CreateOperator(name string) (oKp nkeys.KeyPair, oPub string, oSeed []byte, oJwt string, err error) {

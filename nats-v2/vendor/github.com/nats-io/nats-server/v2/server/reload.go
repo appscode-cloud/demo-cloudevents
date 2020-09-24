@@ -1,4 +1,4 @@
-// Copyright 2017-2019 The NATS Authors
+// Copyright 2017-2020 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nats-io/jwt"
+	"github.com/nats-io/jwt/v2"
 )
 
 // FlagSnapshot captures the server options as specified by CLI flags at
@@ -53,6 +53,10 @@ type option interface {
 	// IsClusterPermsChange indicates if this option requires reloading
 	// cluster permissions.
 	IsClusterPermsChange() bool
+
+	// IsJetStreamChange inidicates a change in the servers config for JetStream.
+	// Account changes will be handled separately in reloadAuthorization.
+	IsJetStreamChange() bool
 }
 
 // noopOption is a base struct that provides default no-op behaviors.
@@ -71,6 +75,10 @@ func (n noopOption) IsAuthChange() bool {
 }
 
 func (n noopOption) IsClusterPermsChange() bool {
+	return false
+}
+
+func (n noopOption) IsJetStreamChange() bool {
 	return false
 }
 
@@ -289,23 +297,28 @@ type clusterOption struct {
 }
 
 // Apply the cluster change.
-func (c *clusterOption) Apply(server *Server) {
+func (c *clusterOption) Apply(s *Server) {
 	// TODO: support enabling/disabling clustering.
-	server.mu.Lock()
+	s.mu.Lock()
 	tlsRequired := c.newValue.TLSConfig != nil
-	server.routeInfo.TLSRequired = tlsRequired
-	server.routeInfo.TLSVerify = tlsRequired
-	server.routeInfo.AuthRequired = c.newValue.Username != ""
+	s.routeInfo.TLSRequired = tlsRequired
+	s.routeInfo.TLSVerify = tlsRequired
+	s.routeInfo.AuthRequired = c.newValue.Username != ""
 	if c.newValue.NoAdvertise {
-		server.routeInfo.ClientConnectURLs = nil
+		s.routeInfo.ClientConnectURLs = nil
+		s.routeInfo.WSConnectURLs = nil
 	} else {
-		server.routeInfo.ClientConnectURLs = server.clientConnectURLs
+		s.routeInfo.ClientConnectURLs = s.clientConnectURLs
+		s.routeInfo.WSConnectURLs = s.websocket.connectURLs
 	}
-	server.setRouteInfoHostPortAndIP()
-	server.mu.Unlock()
-	server.Noticef("Reloaded: cluster")
+	s.setRouteInfoHostPortAndIP()
+	s.mu.Unlock()
+	if c.newValue.Name != "" && c.newValue.Name != s.ClusterName() {
+		s.setClusterName(c.newValue.Name)
+	}
+	s.Noticef("Reloaded: cluster")
 	if tlsRequired && c.newValue.TLSConfig.InsecureSkipVerify {
-		server.Warnf(clusterTLSInsecureWarning)
+		s.Warnf(clusterTLSInsecureWarning)
 	}
 }
 
@@ -515,7 +528,7 @@ type clientAdvertiseOption struct {
 // Apply the setting by updating the server info and regenerate the infoJSON byte array.
 func (c *clientAdvertiseOption) Apply(server *Server) {
 	server.mu.Lock()
-	server.setInfoHostPortAndGenerateJSON()
+	server.setInfoHostPort()
 	server.mu.Unlock()
 	server.Noticef("Reload: client_advertise = %s", c.newValue)
 }
@@ -529,6 +542,20 @@ type accountsOption struct {
 // Apply is a no-op. Changes will be applied in reloadAuthorization
 func (a *accountsOption) Apply(s *Server) {
 	s.Noticef("Reloaded: accounts")
+}
+
+// For changes to a server's config.
+type jetStreamOption struct {
+	noopOption
+	newValue bool
+}
+
+func (a *jetStreamOption) Apply(s *Server) {
+	s.Noticef("Reloaded: jetstream")
+}
+
+func (jso jetStreamOption) IsJetStreamChange() bool {
+	return true
 }
 
 // connectErrorReports implements the option interface for the `connect_error_reports`
@@ -574,6 +601,14 @@ func (m *maxTracedMsgLenOption) Apply(server *Server) {
 // file or an option which doesn't support hot-swapping was changed.
 func (s *Server) Reload() error {
 	s.mu.Lock()
+
+	s.reloading = true
+	defer func() {
+		s.mu.Lock()
+		s.reloading = false
+		s.mu.Unlock()
+	}()
+
 	if s.configFile == "" {
 		s.mu.Unlock()
 		return errors.New("can only reload config when a file is provided using -c or --config")
@@ -597,6 +632,7 @@ func (s *Server) Reload() error {
 	clusterOrgPort := curOpts.Cluster.Port
 	gatewayOrgPort := curOpts.Gateway.Port
 	leafnodesOrgPort := curOpts.LeafNode.Port
+	websocketOrgPort := curOpts.Websocket.Port
 
 	s.mu.Unlock()
 
@@ -625,6 +661,9 @@ func (s *Server) Reload() error {
 	}
 	if newOpts.LeafNode.Port == -1 {
 		newOpts.LeafNode.Port = leafnodesOrgPort
+	}
+	if newOpts.Websocket.Port == -1 {
+		newOpts.Websocket.Port = websocketOrgPort
 	}
 
 	if err := s.reloadOptions(curOpts, newOpts); err != nil {
@@ -715,9 +754,7 @@ func imposeOrder(value interface{}) error {
 			return value[i].String() < value[j].String()
 		})
 	case []string:
-		sort.Slice(value, func(i, j int) bool {
-			return value[i] < value[j]
-		})
+		sort.Strings(value)
 	case []*jwt.OperatorClaims:
 		sort.Slice(value, func(i, j int) bool {
 			return value[i].Issuer < value[j].Issuer
@@ -726,8 +763,10 @@ func imposeOrder(value interface{}) error {
 		sort.Slice(value.Gateways, func(i, j int) bool {
 			return value.Gateways[i].Name < value.Gateways[j].Name
 		})
+	case WebsocketOpts:
+		sort.Strings(value.AllowedOrigins)
 	case string, bool, int, int32, int64, time.Duration, float64, nil,
-		LeafNodeOpts, ClusterOpts, *tls.Config, *URLAccResolver, *MemAccResolver, Authentication:
+		LeafNodeOpts, ClusterOpts, *tls.Config, *URLAccResolver, *MemAccResolver, *DirAccResolver, *CacheDirAccResolver, Authentication:
 		// explicitly skipped types
 	default:
 		// this will fail during unit tests
@@ -866,6 +905,68 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			tmpNew := newValue.(LeafNodeOpts)
 			tmpOld.TLSConfig = nil
 			tmpNew.TLSConfig = nil
+
+			// Special check for leafnode remotes changes which are not supported right now.
+			leafRemotesChanged := func(a, b LeafNodeOpts) bool {
+				if len(tmpOld.Remotes) != len(tmpNew.Remotes) {
+					return true
+				}
+
+				// Check whether all remotes URLs are still the same.
+				for _, oldRemote := range tmpOld.Remotes {
+					var found bool
+
+					for _, newRemote := range tmpNew.Remotes {
+						// Bind to global account in case not defined.
+						if newRemote.LocalAccount == _EMPTY_ {
+							newRemote.LocalAccount = globalAccountName
+						}
+
+						if reflect.DeepEqual(oldRemote, newRemote) {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						return true
+					}
+				}
+
+				return false
+			}
+
+			// First check whether remotes changed at all. If they did not,
+			// skip them in the complete equal check.
+			if !leafRemotesChanged(tmpOld, tmpNew) {
+				tmpOld.Remotes = nil
+				tmpNew.Remotes = nil
+			}
+
+			// If there is really a change prevents reload.
+			if !reflect.DeepEqual(tmpOld, tmpNew) {
+				// See TODO(ik) note below about printing old/new values.
+				return nil, fmt.Errorf("config reload not supported for %s: old=%v, new=%v",
+					field.Name, oldValue, newValue)
+			}
+		case "storedir":
+			return nil, fmt.Errorf("config reload not supported for jetstream storage directory")
+		case "jetstream":
+			new := newValue.(bool)
+			old := oldValue.(bool)
+			if new != old {
+				diffOpts = append(diffOpts, &jetStreamOption{newValue: new})
+			}
+		case "jetstreammaxmemory":
+			return nil, fmt.Errorf("config reload not supported for jetstream max memory")
+		case "jetstreammaxstore":
+			return nil, fmt.Errorf("config reload not supported for jetstream max storage")
+		case "websocket":
+			// Similar to gateways
+			tmpOld := oldValue.(WebsocketOpts)
+			tmpNew := newValue.(WebsocketOpts)
+			tmpOld.TLSConfig = nil
+			tmpNew.TLSConfig = nil
 			// If there is really a change prevents reload.
 			if !reflect.DeepEqual(tmpOld, tmpNew) {
 				// See TODO(ik) note below about printing old/new values.
@@ -1002,10 +1103,11 @@ func (s *Server) reloadAuthorization() {
 	// This map will contain the names of accounts that have their streams
 	// import configuration changed.
 	awcsti := make(map[string]struct{})
-
+	checkJetStream := false
 	s.mu.Lock()
 
-	// This can not be changed for now so ok to check server's trustedKeys
+	// This can not be changed for now so ok to check server's trustedKeys unlocked.
+	// If plain configured accounts, process here.
 	if s.trustedKeys == nil {
 		// We need to drain the old accounts here since we have something
 		// new configured. We do not want s.accounts to change since that would
@@ -1023,6 +1125,7 @@ func (s *Server) reloadAuthorization() {
 		s.gacc = nil
 		s.configureAccounts()
 		s.configureAuthorization()
+		s.mu.Unlock()
 
 		s.accounts.Range(func(k, v interface{}) bool {
 			newAcc := v.(*Account)
@@ -1030,15 +1133,25 @@ func (s *Server) reloadAuthorization() {
 				// If account exist in latest config, "transfer" the account's
 				// sublist and client map to the new account.
 				acc.mu.RLock()
+				newAcc.mu.Lock()
 				if len(acc.clients) > 0 {
 					newAcc.clients = make(map[*client]struct{}, len(acc.clients))
 					for c := range acc.clients {
 						newAcc.clients[c] = struct{}{}
 					}
 				}
+
 				newAcc.sl = acc.sl
 				newAcc.rm = acc.rm
-				newAcc.respMap = acc.respMap
+				newAcc.js = acc.js
+
+				if len(acc.imports.rrMap) > 0 {
+					newAcc.imports.rrMap = make(map[string][]*serviceRespEntry)
+					for k, v := range acc.imports.rrMap {
+						newAcc.imports.rrMap[k] = v
+					}
+				}
+				newAcc.mu.Unlock()
 				acc.mu.RUnlock()
 
 				// Check if current and new config of this account are same
@@ -1046,9 +1159,20 @@ func (s *Server) reloadAuthorization() {
 				if !acc.checkStreamImportsEqual(newAcc) {
 					awcsti[newAcc.Name] = struct{}{}
 				}
+
+				// We need to remove all old service import subs.
+				acc.removeAllServiceImportSubs()
+				newAcc.addAllServiceImportSubs()
 			}
 			return true
 		})
+		s.mu.Lock()
+		// Check if we had a default system account.
+		if s.sys != nil && s.sys.account != nil && !s.opts.NoSystemAccount {
+			s.accounts.Store(s.sys.account.Name, s.sys.account)
+		}
+		// Double check any JetStream configs.
+		checkJetStream = true
 	} else if s.opts.AccountResolver != nil {
 		s.configureResolver()
 		if _, ok := s.accResolver.(*MemAccResolver); ok {
@@ -1063,9 +1187,7 @@ func (s *Server) reloadAuthorization() {
 				if acc == s.gacc {
 					return true
 				}
-				acc.mu.RLock()
-				accName := acc.Name
-				acc.mu.RUnlock()
+				accName := acc.GetName()
 				// Release server lock for following actions
 				s.mu.Unlock()
 				accClaims, claimJWT, _ := s.fetchAccountClaims(accName)
@@ -1128,6 +1250,8 @@ func (s *Server) reloadAuthorization() {
 			client.authViolation()
 			continue
 		}
+		// Check to make sure account is correct.
+		client.swapAccountAfterReload()
 		// Remove any unauthorized subscriptions and check for account imports.
 		client.processSubsOnConfigReload(awcsti)
 	}
@@ -1142,11 +1266,20 @@ func (s *Server) reloadAuthorization() {
 			route.authViolation()
 		}
 	}
+
+	// We will double check all JetStream configs on a reload.
+	if checkJetStream {
+		s.configAllJetStreamAccounts()
+	}
+
+	if res := s.AccountResolver(); res != nil {
+		res.Reload()
+	}
 }
 
 // Returns true if given client current account has changed (or user
 // no longer exist) in the new config, false if the user did not
-// change account.
+// change accounts.
 // Server lock is held on entry.
 func (s *Server) clientHasMovedToDifferentAccount(c *client) bool {
 	var (

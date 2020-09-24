@@ -20,7 +20,7 @@ type Example struct {
 }
 
 func main() {
-	sender, err := nats.NewSender("nats://localhost:4222", "ORDERS.processed",
+	sender, err := nats.NewSender("nats://localhost:5222", "ORDERS.processed",
 		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "a.creds"))))
 	if err != nil {
 		panic(err)

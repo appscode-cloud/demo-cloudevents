@@ -8,7 +8,7 @@ require (
 	github.com/fatih/color v1.9.0 // indirect
 	github.com/hokaccha/go-prettyjson v0.0.0-20190818114111-108c894c2c0e // indirect
 	github.com/nats-io/jsm.go v0.0.18
-	github.com/nats-io/jwt v1.0.1
+	github.com/nats-io/jwt v1.0.1 // indirect
 	github.com/nats-io/jwt/v2 v2.0.0-20200827232814-292806fa48ba
 	github.com/nats-io/nats-server/v2 v2.1.8-0.20200911161627-53ff94c75004
 	github.com/nats-io/nats.go v1.10.1-0.20200606002146-fc6fed82929a

@@ -135,8 +135,31 @@ var (
 	// ErrRevocation is returned when a credential has been revoked.
 	ErrRevocation = errors.New("credentials have been revoked")
 
-	// Used to signal an error that a server is not running.
+	// ErrServerNotRunning is used to signal an error that a server is not running.
 	ErrServerNotRunning = errors.New("server is not running")
+
+	// ErrBadMsgHeader signals the parser detected a bad message header
+	ErrBadMsgHeader = errors.New("bad message header detected")
+
+	// ErrMsgHeadersNotSupported signals the parser detected a message header
+	// but they are not supported on this server.
+	ErrMsgHeadersNotSupported = errors.New("message headers not supported")
+
+	// ErrNoRespondersRequiresHeaders signals that a client needs to have headers
+	// on if they want no responders behavior.
+	ErrNoRespondersRequiresHeaders = errors.New("no responders requires headers support")
+
+	// ErrClusterNameConfigConflict signals that the options for cluster name in cluster and gateway are in conflict.
+	ErrClusterNameConfigConflict = errors.New("cluster name conflicts between cluster and gateway definitions")
+
+	// ErrClusterNameRemoteConflict signals that a remote server has a different cluster name.
+	ErrClusterNameRemoteConflict = errors.New("cluster name from remote server conflicts")
+
+	// ErrMalformedSubject is returned when a subscription is made with a subject that does not conform to subject rules.
+	ErrMalformedSubject = errors.New("malformed subject")
+
+	// ErrSubscribePermissionViolation is returned when processing of a subscription fails due to permissions.
+	ErrSubscribePermissionViolation = errors.New("subscribe permission viloation")
 )
 
 // configErr is a configuration error.

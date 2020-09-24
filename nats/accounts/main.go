@@ -1,25 +1,18 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"path/filepath"
 	"time"
 
-	"github.com/nats-io/nats.go"
+	natsd "github.com/nats-io/nats-server/v2/server"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/server"
-
-	jwtv1 "github.com/nats-io/jwt"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
 
-	"github.com/masudur-rahman/demo-cloudevents"
 	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
 )
 
@@ -38,13 +31,13 @@ func init() {
 }
 
 func main() {
-	println(demo_cloudevents.BaseDirectory, "\n")
-	oKp, _, oSeed, oJwt, err := CreateOperatorV1("KO")
+	println("Configuration directory: ", confs.ConfDir, "\n")
+	oKp, _, oSeed, oJwt, err := CreateOperator("KO")
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println(string(oSeed))
-	if err := ioutil.WriteFile(filepath.Join(confs.ConfDir, "KO.jwt"), []byte(oJwt), 0666); err != nil {
+	if err := ioutil.WriteFile(confs.OpJwtPath, []byte(oJwt), 0666); err != nil {
 		panic(err)
 	}
 	//return
@@ -64,25 +57,18 @@ func main() {
 	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`//listen: -1
 jetstream: {max_mem_store: 10Mb, max_file_store: 10Mb}
 host: localhost
-port: 4222
+port: 5222
 operator: %s
-//resolver: URL(http://localhost:9090/jwt/v1/accounts/)
 resolver: {
 	type: full
 	dir: %s
 }
-system_account: %s`, filepath.Join(confs.ConfDir, "KO.jwt"), confs.ConfDir, sPub)), 0666)
+system_account: %s`, confs.OpJwtPath, confs.ConfDir, sPub)), 0666)
 	if err != nil {
 		panic(err)
 	}
 
-	aKp, aPub, _, err := CreateAccount("A", oKp)
-	if err != nil {
-		panic(err)
-	}
-	claim := jwt.NewAccountClaims(aPub)
-	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 3, Consumer: 4}
-	aJwt, err := claim.Encode(oKp)
+	aKp, aPub, aJwt, err := CreateAccount("A", oKp)
 	if err != nil {
 		panic(err)
 	}
@@ -94,117 +80,43 @@ system_account: %s`, filepath.Join(confs.ConfDir, "KO.jwt"), confs.ConfDir, sPub
 		panic(err)
 	}
 
-	bKp, bPub, _, err := CreateAccount("B", oKp)
+	s, err := StartJSServer()
 	if err != nil {
 		panic(err)
 	}
-	claim = jwt.NewAccountClaims(bPub)
-	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 3, Consumer: 4}
-	bJwt, err := claim.Encode(oKp)
-	if err != nil {
-		panic(err)
-	}
-	_, _, _, bCreds, err := CreateUser("b", bKp)
-	if err != nil {
-		panic(err)
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "b.creds"), bCreds, 0666); err != nil {
-		panic(err)
-	}
+	defer s.Shutdown()
 
-	s, c, err := server.StartJSServer()
-	if err != nil {
+	if err = s.AccountResolver().Store(aPub, aJwt); err != nil {
 		panic(err)
 	}
-	defer c.Close()
-
-	if msg, err := c.Request(fmt.Sprintf("$SYS.ACCOUNT.%s.CLAIMS.UPDATE", aPub), []byte(aJwt), 10*time.Second); err != nil {
-		panic(err)
-	} else {
-		content := make(map[string]interface{})
-		if err := json.Unmarshal(msg.Data, &content); err != nil {
-			panic(err)
-		} else if _, ok := content["data"]; !ok {
-			panic(err)
-		}
-	}
-	if msg, err := c.Request(fmt.Sprintf("$SYS.ACCOUNT.%s.CLAIMS.UPDATE", bPub), []byte(bJwt), 10*time.Second); err != nil {
-		panic(err)
-	} else {
-		content := make(map[string]interface{})
-		if err := json.Unmarshal(msg.Data, &content); err != nil {
-			panic(err)
-		} else if _, ok := content["data"]; !ok {
-			panic(err)
-		}
-	}
-	fmt.Println("Account jwt updated")
-	fmt.Println(s.ClientURL())
-	anc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")), nats.ReconnectWait(200*time.Millisecond))
-	if err != nil {
-		panic(err)
-	}
-	//bnc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "b.creds")), nats.ReconnectWait(200*time.Millisecond))
-	//if err != nil {
-	//	panic(err)
-	//}
-	println("Connected")
-
-	stream, err := server.AddStream("ORDERS", anc)
-	if err != nil {
-		panic(err)
-	}
-	log.Printf("A stream named `%s` has been created", stream.Name())
-
-	consumer, err := server.AddConsumer("NEW", "ORDERS.processed", stream.Name(), anc)
-	if err != nil {
-		panic(err)
-	}
-	log.Printf("A consumer named `%s` has been created", consumer.Name())
-
-	//fmt.Println(sJwt, "\n\n", string(sCreds))
-	var done chan bool
-	<-done
+	log.Println("Everything is okay, I guess")
 }
 
-func CreateOperatorV1(name string) (nkeys.KeyPair, string, []byte, string, error) {
-	oKp, err := nkeys.CreateOperator()
-	if err != nil {
-		return nil, "", nil, "", err
-	}
-	oPub, err := oKp.PublicKey()
-	if err != nil {
-		return nil, "", nil, "", err
+func StartJSServer() (*natsd.Server, error) {
+	opts := &natsd.Options{
+		ConfigFile: confs.ServerConfigFile,
 	}
 
-	oSeed, err := oKp.Seed()
+	err := opts.ProcessConfigFile(opts.ConfigFile)
 	if err != nil {
-		return nil, "", nil, "", err
+		return nil, err
 	}
-	claim := jwtv1.OperatorClaims{
-		ClaimsData: jwtv1.ClaimsData{
-			Audience:  oPub,
-			Expires:   time.Now().Add(24 * time.Hour).Unix(),
-			ID:        oPub,
-			IssuedAt:  time.Now().Unix(),
-			Issuer:    "Masudur Rahman",
-			Name:      oPub,
-			NotBefore: time.Now().Unix(),
-			Subject:   oPub,
-		},
-		Operator: jwtv1.Operator{
-			SigningKeys: jwtv1.StringList{oPub},
-		},
-	}
-	//claim := jwt.NewOperatorClaims(oPub)
-	claim.Name = name
-	oJwt, err := claim.Encode(oKp)
+	opts.Port = 1222
+
+	s, err := natsd.NewServer(opts)
 	if err != nil {
-		return nil, "", nil, "", err
+		return nil, err
+	}
+	go s.Start()
+	if !s.ReadyForConnections(10 * time.Second) {
+		return nil, errors.New("nats server didn't start")
 	}
 
-	return oKp, oPub, oSeed, oJwt, nil
+	log.Println("NATS Server with Jetstream started...")
+
+	return s, nil
 }
+
 func CreateOperator(name string) (nkeys.KeyPair, string, []byte, string, error) {
 	oKp, err := nkeys.CreateOperator()
 	if err != nil {
@@ -256,6 +168,7 @@ func CreateAccount(name string, oKp nkeys.KeyPair) (nkeys.KeyPair, string, strin
 
 	claim := jwt.NewAccountClaims(aPub)
 	claim.Name = name
+	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 3, Consumer: 4}
 	aJwt, err := claim.Encode(oKp)
 	if err != nil {
 		return nil, "", "", err
@@ -292,53 +205,4 @@ func CreateUser(name string, aKp nkeys.KeyPair) (nkeys.KeyPair, string, string, 
 	}
 
 	return uKp, uPub, uJwt, uCreds, nil
-}
-
-func User() (*jwt.AccountClaims, error) {
-	akp, err := nkeys.CreateAccount()
-	if err != nil {
-		return nil, err
-	}
-	//akp2, err := nkeys.CreateAccount()
-	//if err != nil {
-	//	return err
-	//}
-
-	apk, err := akp.PublicKey()
-	if err != nil {
-		return nil, err
-	}
-	//apk2, err := akp2.PublicKey()
-	//if err != nil {
-	//	return err
-	//}
-
-	activation := jwt.NewActivationClaims(apk)
-	activation.Expires = time.Now().Add(time.Hour).UTC().Unix()
-
-	account := jwt.NewAccountClaims(apk)
-	if !account.Limits.IsUnlimited() {
-		return nil, errors.New("expected unlimited operator limits")
-	}
-	account.Limits.Exports = 10
-	account.Limits.WildcardExports = true
-
-	account.Exports = jwt.Exports{}
-	account.Exports.Add(&jwt.Export{
-		Name:    "test export",
-		Subject: "test.>",
-		Type:    jwt.Stream,
-	})
-
-	return account, nil
-}
-
-func PushAccount(u string, data []byte) error {
-	resp, err := http.Post(u, "application/jwt", bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	//message, err := ioutil.ReadAll(resp.Body)
-	return nil
 }

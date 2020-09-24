@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	con, err := nats.NewConsumer("nats://localhost:4222", "NEW",
+	con, err := nats.NewConsumer("nats://localhost:5222", "NEW",
 		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "a.creds"))), nats.WithPullConsumer("ORDERS"))
 	if err != nil {
 		panic(err)
@@ -40,12 +40,13 @@ type Example struct {
 }
 
 func process(ctx context.Context, event cloudevents.Event) error {
-	//oneliners.PrettyJson(event)
 	data := &Example{}
 	if err := event.DataAs(data); err != nil {
 		return err
 	}
 	oneliners.PrettyJson(data)
+
+	//TODO: Send message to NATS/V2 server channel for user to listen
 
 	return nil
 }

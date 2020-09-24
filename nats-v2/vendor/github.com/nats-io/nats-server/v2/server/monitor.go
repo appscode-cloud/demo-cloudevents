@@ -139,7 +139,7 @@ const defaultStackBufSize = 10000
 func newSubsDetailList(client *client) []SubDetail {
 	subsDetail := make([]SubDetail, 0, len(client.subs))
 	for _, sub := range client.subs {
-		subsDetail = append(subsDetail, newSubDetail(sub))
+		subsDetail = append(subsDetail, newClientSubDetail(sub))
 	}
 	return subsDetail
 }
@@ -771,8 +771,11 @@ type SubszOptions struct {
 	// Limit is the maximum number of subscriptions that should be returned by Subsz().
 	Limit int `json:"limit"`
 
-	// Subscriptions indicates if subscriptions should be included in the results.
+	// Subscriptions indicates if subscription details should be included in the results.
 	Subscriptions bool `json:"subscriptions"`
+
+	// Filter based on this account name.
+	Account string `json:"account,omitempty"`
 
 	// Test the list against this subject. Needs to be literal since it signifies a publish subject.
 	// We will only return subscriptions that would match if a message was sent to this subject.
@@ -781,6 +784,7 @@ type SubszOptions struct {
 
 // SubDetail is for verbose information for subscriptions.
 type SubDetail struct {
+	Account string `json:"account,omitempty"`
 	Subject string `json:"subject"`
 	Queue   string `json:"qgroup,omitempty"`
 	Sid     string `json:"sid"`
@@ -789,7 +793,17 @@ type SubDetail struct {
 	Cid     uint64 `json:"cid"`
 }
 
+// Subscription client should be locked and guaranteed to be present.
 func newSubDetail(sub *subscription) SubDetail {
+	sd := newClientSubDetail(sub)
+	if sub.client.acc != nil {
+		sd.Account = sub.client.acc.GetName()
+	}
+	return sd
+}
+
+// For subs details under clients.
+func newClientSubDetail(sub *subscription) SubDetail {
 	return SubDetail{
 		Subject: string(sub.subject),
 		Queue:   string(sub.queue),
@@ -808,6 +822,7 @@ func (s *Server) Subsz(opts *SubszOptions) (*Subsz, error) {
 		offset    int
 		limit     = DefaultSubListSize
 		testSub   = ""
+		filterAcc = ""
 	)
 
 	if opts != nil {
@@ -827,6 +842,9 @@ func (s *Server) Subsz(opts *SubszOptions) (*Subsz, error) {
 				return nil, fmt.Errorf("invalid test subject, must be valid publish subject: %s", testSub)
 			}
 		}
+		if opts.Account != "" {
+			filterAcc = opts.Account
+		}
 	}
 
 	slStats := &SublistStats{}
@@ -839,6 +857,9 @@ func (s *Server) Subsz(opts *SubszOptions) (*Subsz, error) {
 		subs := raw[:0]
 		s.accounts.Range(func(k, v interface{}) bool {
 			acc := v.(*Account)
+			if filterAcc != "" && acc.GetName() != filterAcc {
+				return true
+			}
 			slStats.add(acc.sl.Stats())
 			acc.sl.localSubs(&subs)
 			return true
@@ -877,6 +898,9 @@ func (s *Server) Subsz(opts *SubszOptions) (*Subsz, error) {
 	} else {
 		s.accounts.Range(func(k, v interface{}) bool {
 			acc := v.(*Account)
+			if filterAcc != "" && acc.GetName() != filterAcc {
+				return true
+			}
 			slStats.add(acc.sl.Stats())
 			return true
 		})
@@ -904,11 +928,14 @@ func (s *Server) HandleSubsz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	testSub := r.URL.Query().Get("test")
+	// Filtered account.
+	filterAcc := r.URL.Query().Get("acc")
 
 	subszOpts := &SubszOptions{
 		Subscriptions: subs,
 		Offset:        offset,
 		Limit:         limit,
+		Account:       filterAcc,
 		Test:          testSub,
 	}
 
@@ -969,6 +996,7 @@ type Varz struct {
 	TLSVerify         bool              `json:"tls_verify,omitempty"`
 	IP                string            `json:"ip,omitempty"`
 	ClientConnectURLs []string          `json:"connect_urls,omitempty"`
+	WSConnectURLs     []string          `json:"ws_connect_urls,omitempty"`
 	MaxConn           int               `json:"max_connections"`
 	MaxSubs           int               `json:"max_subscriptions,omitempty"`
 	PingInterval      time.Duration     `json:"ping_interval"`
@@ -984,6 +1012,7 @@ type Varz struct {
 	Cluster           ClusterOptsVarz   `json:"cluster,omitempty"`
 	Gateway           GatewayOptsVarz   `json:"gateway,omitempty"`
 	LeafNode          LeafNodeOptsVarz  `json:"leaf,omitempty"`
+	JetStream         JetStreamVarz     `json:"jetstream,omitempty"`
 	TLSTimeout        float64           `json:"tls_timeout"`
 	WriteDeadline     time.Duration     `json:"write_deadline"`
 	Start             time.Time         `json:"start"`
@@ -1008,8 +1037,17 @@ type Varz struct {
 	ConfigLoadTime    time.Time         `json:"config_load_time"`
 }
 
+// JetStreamVarz contains basic runtime information about jetstream
+type JetStreamVarz struct {
+	MaxMemory int64  `json:"max_memory,omitempty"`
+	MaxStore  int64  `json:"max_store,omitempty"`
+	StoreDir  string `json:"store_dir,omitempty"`
+	Accounts  int    `json:"accounts,omitempty"`
+}
+
 // ClusterOptsVarz contains monitoring cluster information
 type ClusterOptsVarz struct {
+	Name        string   `json:"name,omitempty"`
 	Host        string   `json:"addr,omitempty"`
 	Port        int      `json:"cluster_port,omitempty"`
 	AuthTimeout float64  `json:"auth_timeout,omitempty"`
@@ -1091,21 +1129,21 @@ func (s *Server) HandleRoot(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	fmt.Fprintf(w, `<html lang="en">
    <head>
-    <link rel="shortcut icon" href="http://nats.io/img/favicon.ico">
+    <link rel="shortcut icon" href="https://nats.io/img/favicon.ico">
     <style type="text/css">
       body { font-family: "Century Gothic", CenturyGothic, AppleGothic, sans-serif; font-size: 22; }
       a { margin-left: 32px; }
     </style>
   </head>
   <body>
-    <img src="http://nats.io/img/logo.png" alt="NATS">
+    <img src="https://nats.io/img/logo.png" alt="NATS">
     <br/>
-	<a href=%s>varz</a><br/>
-	<a href=%s>connz</a><br/>
-	<a href=%s>routez</a><br/>
-	<a href=%s>gatewayz</a><br/>
-	<a href=%s>leafz</a><br/>
-	<a href=%s>subsz</a><br/>
+	<a href=.%s>varz</a><br/>
+	<a href=.%s>connz</a><br/>
+	<a href=.%s>routez</a><br/>
+	<a href=.%s>gatewayz</a><br/>
+	<a href=.%s>leafz</a><br/>
+	<a href=.%s>subsz</a><br/>
     <br/>
     <a href=https://docs.nats.io/nats-server/configuration/monitoring.html>help</a>
   </body>
@@ -1160,6 +1198,7 @@ func (s *Server) createVarz(pcpu float64, rss int64) *Varz {
 		HTTPBasePath: opts.HTTPBasePath,
 		HTTPSPort:    opts.HTTPSPort,
 		Cluster: ClusterOptsVarz{
+			Name:        info.Cluster,
 			Host:        c.Host,
 			Port:        c.Port,
 			AuthTimeout: c.AuthTimeout,
@@ -1211,6 +1250,17 @@ func (s *Server) createVarz(pcpu float64, rss int64) *Varz {
 		}
 		varz.LeafNode.Remotes = rlna
 	}
+
+	if s.js != nil {
+		s.js.mu.RLock()
+		varz.JetStream = JetStreamVarz{
+			MaxMemory: s.js.config.MaxMemory,
+			MaxStore:  s.js.config.MaxStore,
+			StoreDir:  s.js.config.StoreDir,
+		}
+		s.js.mu.RUnlock()
+	}
+
 	// Finish setting it up with fields that can be updated during
 	// configuration reload and runtime.
 	s.updateVarzConfigReloadableFields(varz)
@@ -1266,8 +1316,10 @@ func (s *Server) updateVarzRuntimeFields(v *Varz, forceUpdate bool, pcpu float64
 	v.Mem = rss
 	v.CPU = pcpu
 	if l := len(s.info.ClientConnectURLs); l > 0 {
-		v.ClientConnectURLs = make([]string, l)
-		copy(v.ClientConnectURLs, s.info.ClientConnectURLs)
+		v.ClientConnectURLs = append([]string(nil), s.info.ClientConnectURLs...)
+	}
+	if l := len(s.info.WSConnectURLs); l > 0 {
+		v.WSConnectURLs = append([]string(nil), s.info.WSConnectURLs...)
 	}
 	v.Connections = len(s.clients)
 	v.TotalConnections = s.totalClients
@@ -1315,6 +1367,12 @@ func (s *Server) updateVarzRuntimeFields(v *Varz, forceUpdate bool, pcpu float64
 		}
 	}
 	gw.RUnlock()
+
+	if s.js != nil {
+		s.js.mu.RLock()
+		v.JetStream.Accounts = len(s.js.accounts)
+		s.js.mu.RUnlock()
+	}
 }
 
 // HandleVarz will process HTTP requests for server information.
@@ -1840,6 +1898,15 @@ func (reason ClosedState) String() string {
 		return "Missing Account"
 	case Revocation:
 		return "Credentials Revoked"
+	case InternalClient:
+		return "Internal Client"
+	case MsgHeaderViolation:
+		return "Message Header Violation"
+	case NoRespondersRequiresHeaders:
+		return "No Responders Requires Headers"
+	case ClusterNameConflict:
+		return "Cluster Name Conflict"
 	}
+
 	return "Unknown State"
 }

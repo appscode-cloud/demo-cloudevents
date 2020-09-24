@@ -29,7 +29,7 @@ func StartNATSServer() (*natsd.Server, error) {
 	if err := PushAccount(filepath.Join(confs.ConfDir, "SYS.jwt")); err != nil {
 		return nil, err
 	}
-	if err := PushAccount(filepath.Join(confs.ConfDir, "B.jwt")); err != nil {
+	if err := PushAccount(filepath.Join(confs.ConfDir, "admin.jwt")); err != nil {
 		return nil, err
 	}
 	if err := PushAccount(filepath.Join(confs.ConfDir, "A.jwt")); err != nil {
@@ -41,9 +41,14 @@ func StartNATSServer() (*natsd.Server, error) {
 		LogFile:    "/dev/stdout",
 		Trace:      true,
 		ConfigFile: confs.ServerConfigFile,
+		Websocket: natsd.WebsocketOpts{
+			Port:       9222,
+			NoTLS:      true,
+			SameOrigin: false,
+		},
 	}
 
-	opts, err := natsd.ProcessConfigFile(opts.ConfigFile)
+	err := opts.ProcessConfigFile(opts.ConfigFile)
 	if err != nil {
 		return nil, err
 	}
@@ -58,10 +63,6 @@ func StartNATSServer() (*natsd.Server, error) {
 	}
 
 	log.Println("NATS Server 2.0 started...")
-	//srv, err := server.Run(server.GetDefaultOptions(), opts)
-	//if err != nil {
-	//	return nil, err
-	//}
 
 	return srv, nil
 }

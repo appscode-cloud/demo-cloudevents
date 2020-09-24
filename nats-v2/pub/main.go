@@ -10,22 +10,14 @@ import (
 )
 
 func main() {
-	nc, err := nats.Connect("localhost:4222", nats.Name("Message Publisher"), nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")))
+	nc, err := nats.Connect("localhost:2224", nats.Name("Message Publisher"), nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer nc.Close()
 
-	if err := nc.Publish("Notifications", []byte("Hello there...")); err != nil {
+	if err := nc.Publish("Events", []byte("Hello there...")); err != nil {
 		log.Fatal(err)
 	}
-
-	/*conn, err := stan.Connect("test-cluster", "client", stan.NatsConn(nc))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err = conn.Publish("something", []byte("All is well")); err != nil {
-		log.Fatal(err)
-	}*/
+	log.Printf("Published message to %s channel...", "Events")
 }

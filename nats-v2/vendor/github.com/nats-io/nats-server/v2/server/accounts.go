@@ -1,4 +1,4 @@
-// Copyright 2018-2019 The NATS Authors
+// Copyright 2018-2020 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,23 +14,30 @@
 package server
 
 import (
+	"bytes"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/nats-io/jwt"
+	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nuid"
 )
 
 // For backwards compatibility with NATS < 2.0, users who are not explicitly defined into an
 // account will be grouped in the default global account.
-const globalAccountName = "$G"
+const globalAccountName = DEFAULT_GLOBAL_ACCOUNT
 
 // Account are subject namespace definitions. By default no messages are shared between accounts.
 // You can share via Exports and Imports of Streams and Services.
@@ -43,6 +50,8 @@ type Account struct {
 	mu           sync.RWMutex
 	sqmu         sync.Mutex
 	sl           *Sublist
+	ic           *client
+	isid         uint64
 	etmr         *time.Timer
 	ctmr         *time.Timer
 	strack       map[string]sconns
@@ -55,33 +64,30 @@ type Account struct {
 	lqws         map[string]int32
 	usersRevoked map[string]int64
 	actsRevoked  map[string]int64
-	respMap      map[string][]*serviceRespEntry
 	lleafs       []*client
 	imports      importMap
 	exports      exportMap
+	js           *jsAccount
+	jsLimits     *JetStreamAccountLimits
 	limits
-	nae           int32
-	pruning       bool
-	rmPruning     bool
-	expired       bool
-	incomplete    bool
-	signingKeys   []string
-	srv           *Server // server this account is registered with (possibly nil)
-	lds           string  // loop detection subject for leaf nodes
-	siReply       []byte  // service reply prefix, will form wildcard subscription.
-	siReplyClient *client
-	prand         *rand.Rand
+	expired      bool
+	incomplete   bool
+	signingKeys  []string
+	srv          *Server // server this account is registered with (possibly nil)
+	lds          string  // loop detection subject for leaf nodes
+	siReply      []byte  // service reply prefix, will form wildcard subscription.
+	prand        *rand.Rand
+	eventIds     *nuid.NUID
+	eventIdsMu   sync.Mutex
+	defaultPerms *Permissions
 }
 
 // Account based limits.
 type limits struct {
-	mpay     int32
-	msubs    int32
-	mconns   int32
-	mleafs   int32
-	maxnae   int32
-	maxnrm   int32
-	maxaettl time.Duration
+	mpay   int32
+	msubs  int32
+	mconns int32
+	mleafs int32
 }
 
 // Used to track remote clients and leafnodes per remote server.
@@ -101,24 +107,30 @@ type streamImport struct {
 
 // Import service mapping struct
 type serviceImport struct {
-	acc      *Account
-	claim    *jwt.Import
-	from     string
-	to       string
-	ts       int64
-	rt       ServiceRespType
-	latency  *serviceLatency
-	m1       *ServiceLatency
-	ae       bool
-	internal bool
-	invalid  bool
-	tracking bool
+	acc         *Account
+	claim       *jwt.Import
+	se          *serviceExport
+	sid         []byte
+	from        string
+	to          string
+	exsub       string
+	ts          int64
+	rt          ServiceRespType
+	latency     *serviceLatency
+	m1          *ServiceLatency
+	rc          *client
+	hasWC       bool
+	response    bool
+	invalid     bool
+	share       bool
+	tracking    bool
+	trackingHdr http.Header // header from request
 }
 
 // This is used to record when we create a mapping for implicit service
 // imports. We use this to clean up entries that are not singletons when
 // we detect that interest is no longer present. The key to the map will
-// be the actual interest. We record the mapped subject and the serviceImport
+// be the actual interest. We record the mapped subject and the account.
 type serviceRespEntry struct {
 	acc  *Account
 	msub string
@@ -130,7 +142,7 @@ type ServiceRespType uint8
 // Service response types. Defaults to a singleton.
 const (
 	Singleton ServiceRespType = iota
-	Stream
+	Streamed
 	Chunked
 )
 
@@ -139,8 +151,8 @@ func (rt ServiceRespType) String() string {
 	switch rt {
 	case Singleton:
 		return "Singleton"
-	case Stream:
-		return "Stream"
+	case Streamed:
+		return "Streamed"
 	case Chunked:
 		return "Chunked"
 	}
@@ -162,34 +174,42 @@ type streamExport struct {
 // serviceExport holds additional information for exported services.
 type serviceExport struct {
 	exportAuth
-	respType ServiceRespType
-	latency  *serviceLatency
+	acc        *Account
+	respType   ServiceRespType
+	latency    *serviceLatency
+	rtmr       *time.Timer
+	respThresh time.Duration
 }
 
 // Used to track service latency.
 type serviceLatency struct {
-	sampling int8
+	sampling int8 // percentage from 1-100 or 0 to indicate triggered by header
 	subject  string
 }
 
 // exportMap tracks the exported streams and services.
 type exportMap struct {
-	streams  map[string]*streamExport
-	services map[string]*serviceExport
+	streams   map[string]*streamExport
+	services  map[string]*serviceExport
+	responses map[string]*serviceImport
 }
 
 // importMap tracks the imported streams and services.
+// For services we will also track the response mappings as well.
 type importMap struct {
 	streams  []*streamImport
-	services map[string]*serviceImport // TODO(dlc) sync.Map may be better.
+	services map[string]*serviceImport
+	rrMap    map[string][]*serviceRespEntry
 }
 
 // NewAccount creates a new unlimited account with the given name.
 func NewAccount(name string) *Account {
 	a := &Account{
-		Name:   name,
-		limits: limits{-1, -1, -1, -1, 0, 0, 0},
+		Name:     name,
+		limits:   limits{-1, -1, -1, -1},
+		eventIds: nuid.New(),
 	}
+
 	return a
 }
 
@@ -236,12 +256,22 @@ func (a *Account) shallowCopy() *Account {
 			}
 		}
 	}
+	na.jsLimits = a.jsLimits
+
 	return na
+}
+
+// nextEventID uses its own lock for better concurrency.
+func (a *Account) nextEventID() string {
+	a.eventIdsMu.Lock()
+	id := a.eventIds.Next()
+	a.eventIdsMu.Unlock()
+	return id
 }
 
 // Called to track a remote server and connections and leafnodes it
 // has for this account.
-func (a *Account) updateRemoteServer(m *AccountNumConns) {
+func (a *Account) updateRemoteServer(m *AccountNumConns) []*client {
 	a.mu.Lock()
 	if a.strack == nil {
 		a.strack = make(map[string]sconns)
@@ -252,7 +282,40 @@ func (a *Account) updateRemoteServer(m *AccountNumConns) {
 	a.strack[m.Server.ID] = sconns{conns: int32(m.Conns), leafs: int32(m.LeafNodes)}
 	a.nrclients += int32(m.Conns) - prev.conns
 	a.nrleafs += int32(m.LeafNodes) - prev.leafs
+
+	mtce := a.mconns != jwt.NoLimit && (len(a.clients)-int(a.sysclients)+int(a.nrclients) > int(a.mconns))
+	// If we are over here some have snuck in and we need to rebalance.
+	// All others will probably be doing the same thing but better to be
+	// conservative and bit harsh here. Clients will reconnect if we over compensate.
+	var clients []*client
+	if mtce {
+		clients = make([]*client, 0, len(a.clients))
+		for c := range a.clients {
+			clients = append(clients, c)
+		}
+		sort.Slice(clients, func(i, j int) bool {
+			return clients[i].start.After(clients[j].start)
+		})
+		over := (len(a.clients) - int(a.sysclients) + int(a.nrclients)) - int(a.mconns)
+		if over < len(clients) {
+			clients = clients[:over]
+		}
+	}
+	// Now check leafnodes.
+	mtlce := a.mleafs != jwt.NoLimit && (a.nleafs+a.nrleafs > a.mleafs)
+	if mtlce {
+		// Take ones from the end.
+		leafs := a.lleafs
+		over := int(a.nleafs + a.nrleafs - a.mleafs)
+		if over < len(leafs) {
+			leafs = leafs[len(leafs)-over:]
+		}
+		clients = append(clients, leafs...)
+	}
 	a.mu.Unlock()
+
+	// If we have exceeded our max clients this will be populated.
+	return clients
 }
 
 // Removes tracking for a remote server that has shutdown.
@@ -291,6 +354,17 @@ func (a *Account) clearEventing() {
 	a.clients = nil
 	a.strack = nil
 	a.mu.Unlock()
+}
+
+// GetName will return the accounts name.
+func (a *Account) GetName() string {
+	if a == nil {
+		return "n/a"
+	}
+	a.mu.RLock()
+	name := a.Name
+	a.mu.RUnlock()
+	return name
 }
 
 // NumConnections returns active number of clients for this account for
@@ -340,13 +414,13 @@ func (a *Account) numLocalLeafNodes() int {
 
 // MaxTotalConnectionsReached returns if we have reached our limit for number of connections.
 func (a *Account) MaxTotalConnectionsReached() bool {
-	var mtc bool
+	var mtce bool
 	a.mu.RLock()
 	if a.mconns != jwt.NoLimit {
-		mtc = len(a.clients)-int(a.sysclients)+int(a.nrclients) >= int(a.mconns)
+		mtce = len(a.clients)-int(a.sysclients)+int(a.nrclients) >= int(a.mconns)
 	}
 	a.mu.RUnlock()
-	return mtc
+	return mtce
 }
 
 // MaxActiveConnections return the set limit for the account system
@@ -420,15 +494,19 @@ func (a *Account) TotalSubs() int {
 // for the given `subject`. Works only for literal subjects.
 // TODO: Add support for wildcards
 func (a *Account) SubscriptionInterest(subject string) bool {
-	var interest bool
+	return a.Interest(subject) > 0
+}
+
+// Interest returns the number of subscriptions for a given subject that match.
+func (a *Account) Interest(subject string) int {
+	var nms int
 	a.mu.RLock()
 	if a.sl != nil {
-		if res := a.sl.Match(subject); len(res.psubs)+len(res.qsubs) > 0 {
-			interest = true
-		}
+		res := a.sl.Match(subject)
+		nms = len(res.psubs) + len(res.qsubs)
 	}
 	a.mu.RUnlock()
-	return interest
+	return nms
 }
 
 // addClient keeps our accounting of local active clients or leafnodes updated.
@@ -504,10 +582,10 @@ func (a *Account) removeClient(c *client) int {
 }
 
 func (a *Account) randomClient() *client {
-	var c *client
-	if a.siReplyClient != nil {
-		return a.siReplyClient
+	if a.ic != nil {
+		return a.ic
 	}
+	var c *client
 	for c = range a.clients {
 		break
 	}
@@ -519,43 +597,48 @@ func (a *Account) AddServiceExport(subject string, accounts []*Account) error {
 	return a.AddServiceExportWithResponse(subject, Singleton, accounts)
 }
 
-// AddServiceExportWithresponse will configure the account with the defined export and response type.
+// AddServiceExportWithResponse will configure the account with the defined export and response type.
 func (a *Account) AddServiceExportWithResponse(subject string, respType ServiceRespType, accounts []*Account) error {
 	if a == nil {
 		return ErrMissingAccount
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if a.exports.services == nil {
 		a.exports.services = make(map[string]*serviceExport)
 	}
 
-	ea := a.exports.services[subject]
+	se := a.exports.services[subject]
+	// Always  create a service export
+	if se == nil {
+		se = &serviceExport{}
+	}
 
 	if respType != Singleton {
-		if ea == nil {
-			ea = &serviceExport{}
-		}
-		ea.respType = respType
+		se.respType = respType
 	}
 
 	if accounts != nil {
-		if ea == nil {
-			ea = &serviceExport{}
-		}
 		// empty means auth required but will be import token.
 		if len(accounts) == 0 {
-			ea.tokenReq = true
+			se.tokenReq = true
 		} else {
-			if ea.approved == nil {
-				ea.approved = make(map[string]*Account, len(accounts))
+			if se.approved == nil {
+				se.approved = make(map[string]*Account, len(accounts))
 			}
 			for _, acc := range accounts {
-				ea.approved[acc.Name] = acc
+				se.approved[acc.Name] = acc
 			}
 		}
 	}
-	a.exports.services[subject] = ea
+	lrt := a.lowestServiceExportResponseTime()
+	se.acc = a
+	se.respThresh = DEFAULT_SERVICE_EXPORT_RESPONSE_THRESHOLD
+	a.exports.services[subject] = se
+	if nlrt := a.lowestServiceExportResponseTime(); nlrt != lrt {
+		a.updateAllClientsServiceExportResponseTime(nlrt)
+	}
 	return nil
 }
 
@@ -572,8 +655,10 @@ func (a *Account) TrackServiceExportWithSampling(service, results string, sampli
 		return ErrMissingAccount
 	}
 
-	if sampling < 1 || sampling > 100 {
-		return ErrBadSampling
+	if sampling != 0 { // 0 means triggered by header
+		if sampling < 1 || sampling > 100 {
+			return ErrBadSampling
+		}
 	}
 	if !IsValidPublishSubject(results) {
 		return ErrBadPublishSubject
@@ -713,26 +798,48 @@ func (a *Account) IsExportServiceTracking(service string) bool {
 	return false
 }
 
-// NATSLatency represents the internal NATS latencies, including RTTs to clients.
-type NATSLatency struct {
-	Requestor time.Duration `json:"req"`
-	Responder time.Duration `json:"resp"`
-	System    time.Duration `json:"sys"`
-}
-
-// TotalTime is a helper function that totals the NATS latencies.
-func (nl *NATSLatency) TotalTime() time.Duration {
-	return nl.Requestor + nl.Responder + nl.System
-}
-
 // ServiceLatency is the JSON message sent out in response to latency tracking for
-// exported services.
+// an accounts exported services. Additional client info is available in requestor
+// and responder. Note that for a requestor, the only information shared by default
+// is the RTT used to calculate the total latency. The requestor's account can
+// designate to share the additional information in the service import.
 type ServiceLatency struct {
-	AppName        string        `json:"app,omitempty"`
+	TypedEvent
+
+	Status         int           `json:"status"`
+	Error          string        `json:"description,omitempty"`
+	Requestor      LatencyClient `json:"requestor,omitempty"`
+	Responder      LatencyClient `json:"responder,omitempty"`
+	RequestHeader  http.Header   `json:"header,omitempty"` // only contains header(s) triggering the measurement
 	RequestStart   time.Time     `json:"start"`
-	ServiceLatency time.Duration `json:"svc"`
-	NATSLatency    NATSLatency   `json:"nats"`
+	ServiceLatency time.Duration `json:"service"`
+	SystemLatency  time.Duration `json:"system"`
 	TotalLatency   time.Duration `json:"total"`
+}
+
+// ServiceLatencyType is the NATS Event Type for ServiceLatency
+const ServiceLatencyType = "io.nats.server.metric.v1.service_latency"
+
+// LatencyClient is the JSON message structure assigned to requestors and responders.
+// Note that for a requestor, the only information shared by default is the RTT used
+// to calculate the total latency. The requestor's account can designate to share
+// the additional information in the service import.
+type LatencyClient struct {
+	Account string        `json:"acc"`
+	RTT     time.Duration `json:"rtt"`
+	Start   time.Time     `json:"start,omitempty"`
+	User    string        `json:"user,omitempty"`
+	Name    string        `json:"name,omitempty"`
+	Lang    string        `json:"lang,omitempty"`
+	Version string        `json:"ver,omitempty"`
+	IP      string        `json:"ip,omitempty"`
+	CID     uint64        `json:"cid,omitempty"`
+	Server  string        `json:"server,omitempty"`
+}
+
+// NATSTotalTime is a helper function that totals the NATS latencies.
+func (nl *ServiceLatency) NATSTotalTime() time.Duration {
+	return nl.Requestor.RTT + nl.Responder.RTT + nl.SystemLatency
 }
 
 // Merge function to merge m1 and m2 (requestor and responder) measurements
@@ -743,10 +850,9 @@ type ServiceLatency struct {
 // m1 TotalLatency is correct, so use that.
 // Will use those to back into NATS latency.
 func (m1 *ServiceLatency) merge(m2 *ServiceLatency) {
-	m1.AppName = m2.AppName
-	m1.NATSLatency.System = m1.ServiceLatency - (m2.ServiceLatency + m2.NATSLatency.Responder)
+	m1.SystemLatency = m1.ServiceLatency - (m2.ServiceLatency + m2.Responder.RTT)
 	m1.ServiceLatency = m2.ServiceLatency
-	m1.NATSLatency.Responder = m2.NATSLatency.Responder
+	m1.Responder = m2.Responder
 	sanitizeLatencyMetric(m1)
 }
 
@@ -759,55 +865,117 @@ func sanitizeLatencyMetric(sl *ServiceLatency) {
 	if sl.ServiceLatency < 0 {
 		sl.ServiceLatency = 0
 	}
-	if sl.NATSLatency.System < 0 {
-		sl.NATSLatency.System = 0
+	if sl.SystemLatency < 0 {
+		sl.SystemLatency = 0
 	}
 }
 
 // Used for transporting remote latency measurements.
 type remoteLatency struct {
-	Account string         `json:"account"`
-	ReqId   string         `json:"req_id"`
-	M2      ServiceLatency `json:"m2"`
+	Account    string         `json:"account"`
+	ReqId      string         `json:"req_id"`
+	M2         ServiceLatency `json:"m2"`
+	respThresh time.Duration
+}
+
+// sendLatencyResult will send a latency result and clear the si of the requestor(rc).
+func (a *Account) sendLatencyResult(si *serviceImport, sl *ServiceLatency) {
+	sl.Type = ServiceLatencyType
+	sl.ID = a.nextEventID()
+	sl.Time = time.Now().UTC()
+	a.mu.Lock()
+	lsubj := si.latency.subject
+	si.rc = nil
+	a.mu.Unlock()
+
+	a.srv.sendInternalAccountMsg(a, lsubj, sl)
+}
+
+// Used to send a bad request metric when we do not have a reply subject
+func (a *Account) sendBadRequestTrackingLatency(si *serviceImport, requestor *client, header http.Header) {
+	sl := &ServiceLatency{
+		Status:    400,
+		Error:     "Bad Request",
+		Requestor: requestor.getClientInfo(si.share),
+	}
+	sl.RequestHeader = header
+	sl.RequestStart = time.Now().Add(-sl.Requestor.RTT).UTC()
+	a.sendLatencyResult(si, sl)
+}
+
+// Used to send a latency result when the requestor interest was lost before the
+// response could be delivered.
+func (a *Account) sendReplyInterestLostTrackLatency(si *serviceImport) {
+	sl := &ServiceLatency{
+		Status: 408,
+		Error:  "Request Timeout",
+	}
+	a.mu.RLock()
+	rc := si.rc
+	share := si.share
+	ts := si.ts
+	sl.RequestHeader = si.trackingHdr
+	a.mu.RUnlock()
+	if rc != nil {
+		sl.Requestor = rc.getClientInfo(share)
+	}
+	sl.RequestStart = time.Unix(0, ts-int64(sl.Requestor.RTT)).UTC()
+	a.sendLatencyResult(si, sl)
+}
+
+func (a *Account) sendBackendErrorTrackingLatency(si *serviceImport, reason rsiReason) {
+	sl := &ServiceLatency{}
+	a.mu.RLock()
+	rc := si.rc
+	share := si.share
+	ts := si.ts
+	sl.RequestHeader = si.trackingHdr
+	a.mu.RUnlock()
+	if rc != nil {
+		sl.Requestor = rc.getClientInfo(share)
+	}
+	sl.RequestStart = time.Unix(0, ts-int64(sl.Requestor.RTT)).UTC()
+	if reason == rsiNoDelivery {
+		sl.Status = 503
+		sl.Error = "Service Unavailable"
+	} else if reason == rsiTimeout {
+		sl.Status = 504
+		sl.Error = "Service Timeout"
+	}
+	a.sendLatencyResult(si, sl)
 }
 
 // sendTrackingMessage will send out the appropriate tracking information for the
 // service request/response latency. This is called when the requestor's server has
 // received the response.
 // TODO(dlc) - holding locks for RTTs may be too much long term. Should revisit.
-func (a *Account) sendTrackingLatency(si *serviceImport, requestor, responder *client) bool {
+func (a *Account) sendTrackingLatency(si *serviceImport, responder *client) bool {
+	if si.rc == nil {
+		return true
+	}
+
 	ts := time.Now()
 	serviceRTT := time.Duration(ts.UnixNano() - si.ts)
+	requestor := si.rc
 
-	var reqClientRTT = requestor.getRTTValue()
-	var respClientRTT time.Duration
-	var appName string
-
-	if responder != nil && responder.kind == CLIENT {
-		respClientRTT = responder.getRTTValue()
-		appName = responder.GetName()
-	}
-
-	// We will estimate time when request left the requestor by time we received
-	// and the client RTT for the requestor.
-	reqStart := time.Unix(0, si.ts-int64(reqClientRTT))
 	sl := &ServiceLatency{
-		AppName:        appName,
-		RequestStart:   reqStart,
-		ServiceLatency: serviceRTT - respClientRTT,
-		NATSLatency: NATSLatency{
-			Requestor: reqClientRTT,
-			Responder: respClientRTT,
-			System:    0,
-		},
-		TotalLatency: reqClientRTT + serviceRTT,
+		Status:    200,
+		Requestor: requestor.getClientInfo(si.share),
+		Responder: responder.getClientInfo(true),
 	}
-	if respClientRTT > 0 {
-		sl.NATSLatency.System = time.Since(ts)
-		sl.TotalLatency += sl.NATSLatency.System
+	sl.RequestStart = time.Unix(0, si.ts-int64(sl.Requestor.RTT)).UTC()
+	sl.ServiceLatency = serviceRTT - sl.Responder.RTT
+	sl.TotalLatency = sl.Requestor.RTT + serviceRTT
+	if sl.Responder.RTT > 0 {
+		sl.SystemLatency = time.Since(ts)
+		sl.TotalLatency += sl.SystemLatency
 	}
-
+	sl.RequestHeader = si.trackingHdr
 	sanitizeLatencyMetric(sl)
+
+	sl.Type = ServiceLatencyType
+	sl.ID = a.nextEventID()
+	sl.Time = time.Now().UTC()
 
 	// If we are expecting a remote measurement, store our sl here.
 	// We need to account for the race between this and us receiving the
@@ -821,6 +989,9 @@ func (a *Account) sendTrackingLatency(si *serviceImport, requestor, responder *c
 			m1.merge(m2)
 			si.acc.mu.Unlock()
 			a.srv.sendInternalAccountMsg(a, si.latency.subject, m1)
+			a.mu.Lock()
+			si.rc = nil
+			a.mu.Unlock()
 			return true
 		}
 		si.m1 = sl
@@ -828,16 +999,40 @@ func (a *Account) sendTrackingLatency(si *serviceImport, requestor, responder *c
 		return false
 	} else {
 		a.srv.sendInternalAccountMsg(a, si.latency.subject, sl)
+		a.mu.Lock()
+		si.rc = nil
+		a.mu.Unlock()
 	}
 	return true
 }
 
-// numServiceRoutes returns the number of service routes on this account.
-func (a *Account) numServiceRoutes() int {
-	a.mu.RLock()
-	num := len(a.imports.services)
-	a.mu.RUnlock()
-	return num
+// This will check to make sure our response lower threshold is set
+// properly in any clients doing rrTracking.
+// Lock should be held.
+func (a *Account) updateAllClientsServiceExportResponseTime(lrt time.Duration) {
+	for c := range a.clients {
+		c.mu.Lock()
+		if c.rrTracking != nil && lrt != c.rrTracking.lrt {
+			c.rrTracking.lrt = lrt
+			if c.rrTracking.ptmr.Stop() {
+				c.rrTracking.ptmr.Reset(lrt)
+			}
+		}
+		c.mu.Unlock()
+	}
+}
+
+// Will select the lowest respThresh from all service exports.
+// Read lock should be held.
+func (a *Account) lowestServiceExportResponseTime() time.Duration {
+	// Lowest we will allow is 5 minutes. Its an upper bound for this function.
+	lrt := time.Duration(5 * time.Minute)
+	for _, se := range a.exports.services {
+		if se.respThresh < lrt {
+			lrt = se.respThresh
+		}
+	}
+	return lrt
 }
 
 // AddServiceImportWithClaim will add in the service import via the jwt claim.
@@ -845,12 +1040,14 @@ func (a *Account) AddServiceImportWithClaim(destination *Account, from, to strin
 	if destination == nil {
 		return ErrMissingAccount
 	}
+	// Empty means use from. Also means we can use wildcards since we are not doing remapping.
+	if !IsValidSubject(from) || (to != "" && (!IsValidLiteralSubject(from) || !IsValidLiteralSubject(to))) {
+		return ErrInvalidSubject
+	}
+
 	// Empty means use from.
 	if to == "" {
 		to = from
-	}
-	if !IsValidLiteralSubject(from) || !IsValidLiteralSubject(to) {
-		return ErrInvalidSubject
 	}
 	// First check to see if the account has authorized us to route to the "to" subject.
 	if !destination.checkServiceImportAuthorized(a, to, imClaim) {
@@ -861,6 +1058,23 @@ func (a *Account) AddServiceImportWithClaim(destination *Account, from, to strin
 	return err
 }
 
+// SetServiceImportSharing will allow sharing of information about requests with the export account.
+// Used for service latency tracking at the moment.
+func (a *Account) SetServiceImportSharing(destination *Account, to string, allow bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.isClaimAccount() {
+		return fmt.Errorf("claim based accounts can not be updated directly")
+	}
+	for _, si := range a.imports.services {
+		if si.acc == destination && si.to == to {
+			si.share = allow
+			return nil
+		}
+	}
+	return fmt.Errorf("service import not found")
+}
+
 // AddServiceImport will add a route to an account to send published messages / requests
 // to the destination account. From is the local subject to map, To is the
 // subject that will appear on the destination account. Destination will need
@@ -869,161 +1083,242 @@ func (a *Account) AddServiceImport(destination *Account, from, to string) error 
 	return a.AddServiceImportWithClaim(destination, from, to, nil)
 }
 
-// NumServiceImports return number of service imports we have.
+// NumPendingReverseResponses returns the number of response mappings we have for all outstanding
+// requests for service imports.
+func (a *Account) NumPendingReverseResponses() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.imports.rrMap)
+}
+
+// NumPendingAllResponses return the number of all responses outstanding for service exports.
+func (a *Account) NumPendingAllResponses() int {
+	return a.NumPendingResponses("")
+}
+
+// NumResponsesPending returns the number of responses outstanding for service exports
+// on this account. An empty filter string returns all responses regardless of which export.
+// If you specify the filter we will only return ones that are for that export.
+// NOTE this is only for what this server is tracking.
+func (a *Account) NumPendingResponses(filter string) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if filter == "" {
+		return len(a.exports.responses)
+	}
+	se := a.getServiceExport(filter)
+	if se == nil {
+		return 0
+	}
+	var nre int
+	for _, si := range a.exports.responses {
+		if si.se == se {
+			nre++
+		}
+	}
+	return nre
+}
+
+// NumServiceImports returns the number of service imports we have configured.
 func (a *Account) NumServiceImports() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return len(a.imports.services)
 }
 
+// Reason why we are removing this response serviceImport.
+type rsiReason int
+
+const (
+	rsiOk = rsiReason(iota)
+	rsiNoDelivery
+	rsiTimeout
+)
+
+// removeRespServiceImport removes a response si mapping and the reverse entries for interest detection.
+func (a *Account) removeRespServiceImport(si *serviceImport, reason rsiReason) {
+	if si == nil {
+		return
+	}
+
+	a.mu.Lock()
+	delete(a.exports.responses, si.from)
+	dest := si.acc
+	to := si.to
+	tracking := si.tracking
+	rc := si.rc
+	a.mu.Unlock()
+
+	if tracking && rc != nil {
+		a.sendBackendErrorTrackingLatency(si, reason)
+	}
+
+	dest.checkForReverseEntry(to, si, false)
+}
+
 // removeServiceImport will remove the route by subject.
 func (a *Account) removeServiceImport(subject string) {
 	a.mu.Lock()
 	si, ok := a.imports.services[subject]
-	if ok && si != nil && si.ae {
-		a.nae--
-	}
 	delete(a.imports.services, subject)
+
+	var sid []byte
+	c := a.ic
+
+	if ok && si != nil {
+		if a.ic != nil && si.sid != nil {
+			sid = si.sid
+		}
+	}
 	a.mu.Unlock()
+
+	if sid != nil {
+		c.processUnsub(sid)
+	}
 }
 
 // This tracks responses to service requests mappings. This is used for cleanup.
-func (a *Account) addRespMapEntry(acc *Account, reply, from string) {
+func (a *Account) addReverseRespMapEntry(acc *Account, reply, from string) {
 	a.mu.Lock()
-	if a.respMap == nil {
-		a.respMap = make(map[string][]*serviceRespEntry)
+	if a.imports.rrMap == nil {
+		a.imports.rrMap = make(map[string][]*serviceRespEntry)
 	}
 	sre := &serviceRespEntry{acc, from}
-	sra := a.respMap[reply]
-	a.respMap[reply] = append(sra, sre)
-	if len(a.respMap) > int(a.maxnrm) && !a.rmPruning {
-		a.rmPruning = true
-		go a.pruneNonAutoExpireResponseMaps()
-	}
+	sra := a.imports.rrMap[reply]
+	a.imports.rrMap[reply] = append(sra, sre)
 	a.mu.Unlock()
 }
 
-// This checks for any response map entries.
-func (a *Account) checkForRespEntry(reply string) {
+// checkForReverseEntries is for when we are trying to match reverse entries to a wildcard.
+// This will be called from checkForReverseEntry when the reply arg is a wildcard subject.
+// This will usually be called in a go routine since we need to walk all the entries.
+func (a *Account) checkForReverseEntries(reply string, checkInterest bool) {
 	a.mu.RLock()
-	if len(a.imports.services) == 0 || len(a.respMap) == 0 {
+	if len(a.imports.rrMap) == 0 {
 		a.mu.RUnlock()
 		return
 	}
-	sra := a.respMap[reply]
-	if sra == nil {
-		a.mu.RUnlock()
-		return
-	}
-	// If we are here we have an entry we should check. We will first check
-	// if there is any interest for this subject for the entire account. If
-	// there is we can not delete any entries yet.
-	rr := a.sl.Match(reply)
-	a.mu.RUnlock()
 
-	// No interest.
-	if len(rr.psubs)+len(rr.qsubs) > 0 {
+	if subjectIsLiteral(reply) {
+		a.mu.RUnlock()
+		a.checkForReverseEntry(reply, nil, checkInterest)
 		return
 	}
 
-	// Delete all the entries here.
-	a.mu.Lock()
-	delete(a.respMap, reply)
-	a.mu.Unlock()
+	var _rs [32]string
+	rs := _rs[:0]
 
-	// If we are here we no longer have interest and we have a respMap entry
-	// that we should clean up.
-	for _, sre := range sra {
-		sre.acc.removeServiceImport(sre.msub)
-	}
-}
-
-// Return the number of AutoExpireResponseMaps for request/reply. These are mapped to the account that
-// has the service import.
-func (a *Account) numAutoExpireResponseMaps() int {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return int(a.nae)
-}
-
-// MaxAutoExpireResponseMaps return the maximum number of
-// auto expire response maps we will allow.
-func (a *Account) MaxAutoExpireResponseMaps() int {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return int(a.maxnae)
-}
-
-// SetMaxAutoExpireResponseMaps sets the max outstanding auto expire response maps.
-func (a *Account) SetMaxAutoExpireResponseMaps(max int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.maxnae = int32(max)
-}
-
-// AutoExpireTTL returns the ttl for response maps.
-func (a *Account) AutoExpireTTL() time.Duration {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.maxaettl
-}
-
-// SetAutoExpireTTL sets the ttl for response maps.
-func (a *Account) SetAutoExpireTTL(ttl time.Duration) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.maxaettl = ttl
-}
-
-// Return a list of the current autoExpireResponseMaps.
-func (a *Account) autoExpireResponseMaps() []*serviceImport {
-	a.mu.RLock()
-	if len(a.imports.services) == 0 {
-		a.mu.RUnlock()
-		return nil
-	}
-	aesis := make([]*serviceImport, 0, len(a.imports.services))
-	for _, si := range a.imports.services {
-		if si.ae {
-			aesis = append(aesis, si)
+	for k := range a.imports.rrMap {
+		if subjectIsSubsetMatch(k, reply) {
+			rs = append(rs, k)
 		}
 	}
-	sort.Slice(aesis, func(i, j int) bool {
-		return aesis[i].ts < aesis[j].ts
-	})
-
 	a.mu.RUnlock()
-	return aesis
+
+	for _, reply := range rs {
+		a.checkForReverseEntry(reply, nil, checkInterest)
+	}
 }
 
-// MaxResponseMaps return the maximum number of
-// non auto-expire response maps we will allow.
-func (a *Account) MaxResponseMaps() int {
+// This checks for any response map entries. If you specify an si we will only match and
+// clean up for that one, otherwise we remove them all.
+func (a *Account) checkForReverseEntry(reply string, si *serviceImport, checkInterest bool) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return int(a.maxnrm)
-}
+	if len(a.imports.rrMap) == 0 {
+		a.mu.RUnlock()
+		return
+	}
 
-// SetMaxResponseMaps sets the max outstanding non auto-expire response maps.
-func (a *Account) SetMaxResponseMaps(max int) {
+	if subjectHasWildcard(reply) {
+		a.mu.RUnlock()
+		go a.checkForReverseEntries(reply, checkInterest)
+		return
+	}
+
+	sres := a.imports.rrMap[reply]
+	if sres == nil {
+		a.mu.RUnlock()
+		return
+	}
+
+	// If we are here we have an entry we should check.
+	// If requested we will first check if there is any
+	// interest for this subject for the entire account.
+	// If there is we can not delete any entries yet.
+	// Note that if we are here reply has to be a literal subject.
+	if checkInterest {
+		rr := a.sl.Match(reply)
+		// If interest still exists we can not clean these up yet.
+		if len(rr.psubs)+len(rr.qsubs) > 0 {
+			a.mu.RUnlock()
+			return
+		}
+	}
+	a.mu.RUnlock()
+
+	// Delete the appropriate entries here based on optional si.
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.maxnrm = int32(max)
+	if si == nil {
+		delete(a.imports.rrMap, reply)
+	} else {
+		// Find the one we are looking for..
+		for i, sre := range sres {
+			if sre.msub == si.from {
+				sres = append(sres[:i], sres[i+1:]...)
+				break
+			}
+		}
+		if len(sres) > 0 {
+			a.imports.rrMap[si.to] = sres
+		} else {
+			delete(a.imports.rrMap, si.to)
+		}
+	}
+	a.mu.Unlock()
+
+	// If we are here we no longer have interest and we have
+	// response entries that we should clean up.
+	if si == nil {
+		for _, sre := range sres {
+			acc := sre.acc
+			var trackingCleanup bool
+			var rsi *serviceImport
+			acc.mu.Lock()
+			if rsi = acc.exports.responses[sre.msub]; rsi != nil {
+				delete(acc.exports.responses, rsi.from)
+				trackingCleanup = rsi.tracking && rsi.rc != nil
+			}
+			acc.mu.Unlock()
+
+			if trackingCleanup {
+				acc.sendReplyInterestLostTrackLatency(rsi)
+			}
+		}
+	}
 }
 
-// Add a route to connect from an implicit route created for a response to a request.
-// This does no checks and should be only called by the msg processing code. Use
+// Internal check to see if a service import exists.
+func (a *Account) serviceImportExists(dest *Account, from string) bool {
+	a.mu.RLock()
+	dup := a.imports.services[from]
+	a.mu.RUnlock()
+	return dup != nil
+}
+
+// Add a service import.
+// This does no checks and should only be called by the msg processing code. Use
 // AddServiceImport from above if responding to user input or config changes, etc.
 func (a *Account) addServiceImport(dest *Account, from, to string, claim *jwt.Import) (*serviceImport, error) {
 	rt := Singleton
 	var lat *serviceLatency
 
-	dest.mu.Lock()
-	if ea := dest.getServiceExport(to); ea != nil {
-		rt = ea.respType
-		lat = ea.latency
+	dest.mu.RLock()
+	se := dest.getServiceExport(to)
+	if se != nil {
+		rt = se.respType
+		lat = se.latency
 	}
-	dest.mu.Unlock()
+	dest.mu.RUnlock()
 
 	a.mu.Lock()
 	if a.imports.services == nil {
@@ -1033,22 +1328,215 @@ func (a *Account) addServiceImport(dest *Account, from, to string, claim *jwt.Im
 		return nil, fmt.Errorf("duplicate service import subject %q, previously used in import for account %q, subject %q",
 			from, dup.acc.Name, dup.to)
 	}
-	si := &serviceImport{dest, claim, from, to, 0, rt, lat, nil, false, false, false, false}
+
+	if to == "" {
+		to = from
+	}
+	hasWC := subjectHasWildcard(from)
+
+	si := &serviceImport{dest, claim, se, nil, from, to, "", 0, rt, lat, nil, nil, hasWC, false, false, false, false, nil}
 	a.imports.services[from] = si
 	a.mu.Unlock()
 
+	if err := a.addServiceImportSub(si); err != nil {
+		a.removeServiceImport(si.from)
+		return nil, err
+	}
 	return si, nil
 }
 
-// Helper to detrmine when to sample.
-func shouldSample(l *serviceLatency) bool {
-	if l == nil || l.sampling <= 0 {
-		return false
+// Returns the internal client, will create one if not present.
+// Lock should be held.
+func (a *Account) internalClient() *client {
+	if a.ic == nil && a.srv != nil {
+		a.ic = a.srv.createInternalAccountClient()
+		a.ic.acc = a
+	}
+	return a.ic
+}
+
+// Internal account scoped subscriptions.
+func (a *Account) subscribeInternal(subject string, cb msgHandler) (*subscription, error) {
+	a.mu.Lock()
+	c := a.internalClient()
+	a.isid++
+	sid := strconv.FormatUint(a.isid, 10)
+	a.mu.Unlock()
+
+	// This will happen in parsing when the account has not been properly setup.
+	if c == nil {
+		return nil, fmt.Errorf("no internal account client")
+	}
+
+	return c.processSub([]byte(subject), nil, []byte(sid), cb, false)
+}
+
+// This will add an account subscription that matches the "from" from a service import entry.
+func (a *Account) addServiceImportSub(si *serviceImport) error {
+	a.mu.Lock()
+	c := a.internalClient()
+	// This will happen in parsing when the account has not been properly setup.
+	if c == nil {
+		a.mu.Unlock()
+		return nil
+	}
+	if si.sid != nil {
+		a.mu.Unlock()
+		return fmt.Errorf("duplicate call to create subscription for service import")
+	}
+	a.isid++
+	sid := strconv.FormatUint(a.isid, 10)
+	si.sid = []byte(sid)
+	subject := si.from
+	a.mu.Unlock()
+
+	cb := func(sub *subscription, c *client, subject, reply string, msg []byte) {
+		c.processServiceImport(si, a, msg)
+	}
+	_, err := c.processSub([]byte(subject), nil, []byte(sid), cb, true)
+	return err
+}
+
+// Remove all the subscriptions associated with service imports.
+func (a *Account) removeAllServiceImportSubs() {
+	a.mu.RLock()
+	var sids [][]byte
+	for _, si := range a.imports.services {
+		if si.sid != nil {
+			sids = append(sids, si.sid)
+			si.sid = nil
+		}
+	}
+	c := a.ic
+	a.ic = nil
+	a.mu.RUnlock()
+
+	if c == nil {
+		return
+	}
+	for _, sid := range sids {
+		c.processUnsub(sid)
+	}
+	c.closeConnection(InternalClient)
+}
+
+// Add in subscriptions for all registered service imports.
+func (a *Account) addAllServiceImportSubs() {
+	for _, si := range a.imports.services {
+		a.addServiceImportSub(si)
+	}
+}
+
+var (
+	// header where all information is encoded in one value.
+	trcUber = textproto.CanonicalMIMEHeaderKey("Uber-Trace-Id")
+	trcCtx  = textproto.CanonicalMIMEHeaderKey("Traceparent")
+	trcB3   = textproto.CanonicalMIMEHeaderKey("B3")
+	// openzipkin header to check
+	trcB3Sm = textproto.CanonicalMIMEHeaderKey("X-B3-Sampled")
+	trcB3Id = textproto.CanonicalMIMEHeaderKey("X-B3-TraceId")
+	// additional header needed to include when present
+	trcB3PSId        = textproto.CanonicalMIMEHeaderKey("X-B3-ParentSpanId")
+	trcB3SId         = textproto.CanonicalMIMEHeaderKey("X-B3-SpanId")
+	trcCtxSt         = textproto.CanonicalMIMEHeaderKey("Tracestate")
+	trcUberCtxPrefix = textproto.CanonicalMIMEHeaderKey("Uberctx-")
+)
+
+func newB3Header(h http.Header) http.Header {
+	retHdr := http.Header{}
+	if v, ok := h[trcB3Sm]; ok {
+		retHdr[trcB3Sm] = v
+	}
+	if v, ok := h[trcB3Id]; ok {
+		retHdr[trcB3Id] = v
+	}
+	if v, ok := h[trcB3PSId]; ok {
+		retHdr[trcB3PSId] = v
+	}
+	if v, ok := h[trcB3SId]; ok {
+		retHdr[trcB3SId] = v
+	}
+	return retHdr
+}
+
+func newUberHeader(h http.Header, tId []string) http.Header {
+	retHdr := http.Header{trcUber: tId}
+	for k, v := range h {
+		if strings.HasPrefix(k, trcUberCtxPrefix) {
+			retHdr[k] = v
+		}
+	}
+	return retHdr
+}
+
+func newTraceCtxHeader(h http.Header, tId []string) http.Header {
+	retHdr := http.Header{trcCtx: tId}
+	if v, ok := h[trcCtxSt]; ok {
+		retHdr[trcCtxSt] = v
+	}
+	return retHdr
+}
+
+// Helper to determine when to sample. When header has a value, sampling is driven by header
+func shouldSample(l *serviceLatency, c *client) (bool, http.Header) {
+	if l == nil {
+		return false, nil
+	}
+	if l.sampling < 0 {
+		return false, nil
 	}
 	if l.sampling >= 100 {
-		return true
+		return true, nil
 	}
-	return rand.Int31n(100) <= int32(l.sampling)
+	if l.sampling > 0 && rand.Int31n(100) <= int32(l.sampling) {
+		return true, nil
+	}
+	h := c.parseState.getHeader()
+	if len(h) == 0 {
+		return false, nil
+	}
+	if tId := h[trcUber]; len(tId) != 0 {
+		// sample 479fefe9525eddb:5adb976bfc1f95c1:479fefe9525eddb:1
+		tk := strings.Split(tId[0], ":")
+		if len(tk) == 4 && len(tk[3]) > 0 && len(tk[3]) <= 2 {
+			dst := [2]byte{}
+			src := [2]byte{'0', tk[3][0]}
+			if len(tk[3]) == 2 {
+				src[1] = tk[3][1]
+			}
+			if _, err := hex.Decode(dst[:], src[:]); err == nil && dst[0]&1 == 1 {
+				return true, newUberHeader(h, tId)
+			}
+		}
+		return false, nil
+	} else if sampled := h[trcB3Sm]; len(sampled) != 0 && sampled[0] == "1" {
+		return true, newB3Header(h) // allowed
+	} else if len(sampled) != 0 && sampled[0] == "0" {
+		return false, nil // denied
+	} else if _, ok := h[trcB3Id]; ok {
+		// sample 80f198ee56343ba864fe8b2a57d3eff7
+		// presence (with X-B3-Sampled not being 0) means sampling left to recipient
+		return true, newB3Header(h)
+	} else if b3 := h[trcB3]; len(b3) != 0 {
+		// sample 80f198ee56343ba864fe8b2a57d3eff7-e457b5a2e4d86bd1-1-05e3ac9a4f6e3b90
+		// sample 0
+		tk := strings.Split(b3[0], "-")
+		if len(tk) > 2 && tk[2] == "0" {
+			return false, nil // denied
+		} else if len(tk) == 1 && tk[0] == "0" {
+			return false, nil // denied
+		}
+		return true, http.Header{trcB3: b3} // sampling allowed or left to recipient of header
+	} else if tId := h[trcCtx]; len(tId) != 0 {
+		// sample 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+		tk := strings.Split(tId[0], "-")
+		if len(tk) == 4 && len([]byte(tk[3])) == 2 && tk[3] == "01" {
+			return true, newTraceCtxHeader(h, tId)
+		} else {
+			return false, nil
+		}
+	}
+	return false, nil
 }
 
 // Used to mimic client like replies.
@@ -1062,6 +1550,24 @@ const (
 	digits         = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	base           = 62
 )
+
+// This is where all service export responses are handled.
+func (a *Account) processServiceImportResponse(sub *subscription, c *client, subject, reply string, msg []byte) {
+	a.mu.RLock()
+	if a.expired || len(a.exports.responses) == 0 {
+		a.mu.RUnlock()
+		return
+	}
+	si := a.exports.responses[subject]
+	if si == nil || si.invalid {
+		a.mu.RUnlock()
+		return
+	}
+	a.mu.RUnlock()
+
+	// Send for normal processing.
+	c.processServiceImport(si, a, msg)
+}
 
 // Will create a wildcard subscription to handle interest graph propagation for all
 // service replies.
@@ -1078,36 +1584,17 @@ func (a *Account) createRespWildcard() []byte {
 		l /= base
 	}
 	a.siReply = append(b[:], '.')
-	s := a.srv
-	aName := a.Name
 	pre := a.siReply
 	wcsub := append(a.siReply, '>')
+	c := a.internalClient()
+	a.isid++
+	sid := strconv.FormatUint(a.isid, 10)
 	a.mu.Unlock()
 
-	// Check to see if we need to propagate interest.
-	if s != nil {
-		now := time.Now()
-		c := &client{srv: a.srv, acc: a, kind: SYSTEM, opts: internalOpts, msubs: -1, mpay: -1, start: now, last: now}
-		sub := &subscription{client: c, subject: wcsub}
-		s.updateRouteSubscriptionMap(a, sub, 1)
-		if s.gateway.enabled {
-			s.gatewayUpdateSubInterest(aName, sub, 1)
-			a.mu.Lock()
-			a.siReplyClient = c
-			a.mu.Unlock()
-		}
-		// Now check on leafnode updates.
-		s.updateLeafNodes(a, sub, 1)
-	}
+	// Create subscription and internal callback for all the wildcard response subjects.
+	c.processSub(wcsub, nil, []byte(sid), a.processServiceImportResponse, false)
 
 	return pre
-}
-
-func (a *Account) replyClient() *client {
-	a.mu.RLock()
-	c := a.siReplyClient
-	a.mu.RUnlock()
-	return c
 }
 
 // Test whether this is a tracked reply.
@@ -1149,91 +1636,145 @@ func (a *Account) newServiceReply(tracking bool) []byte {
 	return reply
 }
 
-// This is for internal responses.
-func (a *Account) addRespServiceImport(dest *Account, from, to string, rt ServiceRespType, lat *serviceLatency) *serviceImport {
-	a.mu.Lock()
-	if a.imports.services == nil {
-		a.imports.services = make(map[string]*serviceImport)
-	}
-	// dest is the requestor's account. a is the service responder with the export.
-	ae := rt == Singleton
-	si := &serviceImport{dest, nil, from, to, 0, rt, nil, nil, ae, true, false, false}
-	a.imports.services[from] = si
-	if ae {
-		a.nae++
-		si.ts = time.Now().UnixNano()
-		if lat != nil {
-			si.latency = lat
-			si.tracking = true
-		}
-		if a.nae > a.maxnae && !a.pruning {
-			a.pruning = true
-			go a.pruneAutoExpireResponseMaps()
-		}
-	}
-	a.mu.Unlock()
-	return si
+// Checks if a serviceImport was created to map responses.
+func (si *serviceImport) isRespServiceImport() bool {
+	return si != nil && si.response
 }
 
-// This will prune off the non auto-expire (non singleton) response maps.
-func (a *Account) pruneNonAutoExpireResponseMaps() {
-	var sres []*serviceRespEntry
-	a.mu.Lock()
-	for subj, sra := range a.respMap {
-		rr := a.sl.Match(subj)
-		if len(rr.psubs)+len(rr.qsubs) == 0 {
-			delete(a.respMap, subj)
-			sres = append(sres, sra...)
-		}
+// Sets the response theshold timer for a service export.
+// Account lock should be held
+func (se *serviceExport) setResponseThresholdTimer() {
+	if se.rtmr != nil {
+		return // Already set
 	}
-	a.rmPruning = false
-	a.mu.Unlock()
-
-	for _, sre := range sres {
-		sre.acc.removeServiceImport(sre.msub)
-	}
+	se.rtmr = time.AfterFunc(se.respThresh, se.checkExpiredResponses)
 }
 
-// This will prune the list to below the threshold and remove all ttl'd maps.
-func (a *Account) pruneAutoExpireResponseMaps() {
-	defer func() {
-		a.mu.Lock()
-		a.pruning = false
-		a.mu.Unlock()
-	}()
+// Account lock should be held
+func (se *serviceExport) clearResponseThresholdTimer() bool {
+	if se.rtmr == nil {
+		return true
+	}
+	stopped := se.rtmr.Stop()
+	se.rtmr = nil
+	return stopped
+}
 
-	a.mu.RLock()
-	ttl := int64(a.maxaettl)
-	a.mu.RUnlock()
+// checkExpiredResponses will check for any pending responses that need to
+// be cleaned up.
+func (se *serviceExport) checkExpiredResponses() {
+	acc := se.acc
+	if acc == nil {
+		acc.mu.Lock()
+		se.clearResponseThresholdTimer()
+		acc.mu.Unlock()
+		return
+	}
 
-	for {
-		sis := a.autoExpireResponseMaps()
+	var expired []*serviceImport
+	mints := time.Now().UnixNano() - int64(se.respThresh)
 
-		// Check ttl items.
-		now := time.Now().UnixNano()
-		for i, si := range sis {
-			if now-si.ts >= ttl {
-				a.removeServiceImport(si.from)
-			} else {
-				sis = sis[i:]
-				break
+	// TODO(dlc) - Should we release lock while doing this? Or only do these in batches?
+	// Should we break this up for responses only from this service export?
+	// Responses live on acc directly for fast inbound processsing for the _R_ wildcard.
+	// We could do another indirection at this level but just to get to the service export?
+	var totalResponses int
+	acc.mu.RLock()
+	for _, si := range acc.exports.responses {
+		if si.se == se {
+			totalResponses++
+			if si.ts <= mints {
+				expired = append(expired, si)
 			}
 		}
-
-		a.mu.RLock()
-		numOver := int(a.nae - a.maxnae)
-		a.mu.RUnlock()
-
-		if numOver <= 0 {
-			return
-		} else if numOver >= len(sis) {
-			numOver = len(sis) - 1
-		}
-		// These are in sorted order, remove at least numOver
-		for _, si := range sis[:numOver] {
-			a.removeServiceImport(si.from)
-		}
 	}
+	acc.mu.RUnlock()
+
+	for _, si := range expired {
+		acc.removeRespServiceImport(si, rsiTimeout)
+	}
+
+	// Pull out expired to determine if we have any left for timer.
+	totalResponses -= len(expired)
+
+	// Redo timer as needed.
+	acc.mu.Lock()
+	if totalResponses > 0 && se.rtmr != nil {
+		se.rtmr.Stop()
+		se.rtmr.Reset(se.respThresh)
+	} else {
+		se.clearResponseThresholdTimer()
+	}
+	acc.mu.Unlock()
+}
+
+// ServiceExportResponseThreshold returns the current threshold.
+func (a *Account) ServiceExportResponseThreshold(export string) (time.Duration, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	se := a.getServiceExport(export)
+	if se == nil {
+		return 0, fmt.Errorf("no export defined for %q", export)
+	}
+	return se.respThresh, nil
+}
+
+// SetServiceExportResponseThreshold sets the maximum time the system will a response to be delivered
+// from a service export responder.
+func (a *Account) SetServiceExportResponseThreshold(export string, maxTime time.Duration) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.isClaimAccount() {
+		return fmt.Errorf("claim based accounts can not be updated directly")
+	}
+	lrt := a.lowestServiceExportResponseTime()
+	se := a.getServiceExport(export)
+	if se == nil {
+		return fmt.Errorf("no export defined for %q", export)
+	}
+	se.respThresh = maxTime
+	if nlrt := a.lowestServiceExportResponseTime(); nlrt != lrt {
+		a.updateAllClientsServiceExportResponseTime(nlrt)
+	}
+	return nil
+}
+
+// This is for internal service import responses.
+func (a *Account) addRespServiceImport(dest *Account, to string, osi *serviceImport, tracking bool, header http.Header) *serviceImport {
+	nrr := string(osi.acc.newServiceReply(tracking))
+
+	a.mu.Lock()
+	rt := osi.rt
+
+	// dest is the requestor's account. a is the service responder with the export.
+	// Marked as internal here, that is how we distinguish.
+	si := &serviceImport{dest, nil, osi.se, nil, nrr, to, osi.to, 0, rt, nil, nil, nil, false, true, false, osi.share, false, nil}
+
+	if a.exports.responses == nil {
+		a.exports.responses = make(map[string]*serviceImport)
+	}
+	a.exports.responses[nrr] = si
+
+	// Always grab time and make sure response threshold timer is running.
+	si.ts = time.Now().UnixNano()
+	osi.se.setResponseThresholdTimer()
+
+	if rt == Singleton && tracking {
+		si.latency = osi.latency
+		si.tracking = true
+		si.trackingHdr = header
+	}
+	a.mu.Unlock()
+
+	// We do not do individual subscriptions here like we do on configured imports.
+	// We have an internal callback for all responses inbound to this account and
+	// will process appropriately there. This does not pollute the sublist and the caches.
+
+	// We do add in the reverse map such that we can detect loss of interest and do proper
+	// cleanup of this si as interest goes away.
+	dest.addReverseRespMapEntry(a, to, nrr)
+
+	return si
 }
 
 // AddStreamImportWithClaim will add in the stream import from a specific account with optional token.
@@ -1294,8 +1835,10 @@ func (a *Account) AddStreamExport(subject string, accounts []*Account) error {
 	if a == nil {
 		return ErrMissingAccount
 	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if a.exports.streams == nil {
 		a.exports.streams = make(map[string]*streamExport)
 	}
@@ -1377,18 +1920,18 @@ func (a *Account) checkStreamExportApproved(account *Account, subject string, im
 
 func (a *Account) checkServiceExportApproved(account *Account, subject string, imClaim *jwt.Import) bool {
 	// Check direct match of subject first
-	ea, ok := a.exports.services[subject]
+	se, ok := a.exports.services[subject]
 	if ok {
-		// if ea is nil or eq.approved is nil, that denotes a public export
-		if ea == nil || (ea.approved == nil && !ea.tokenReq) {
+		// if se is nil or eq.approved is nil, that denotes a public export
+		if se == nil || (se.approved == nil && !se.tokenReq) {
 			return true
 		}
 		// Check if token required
-		if ea.tokenReq {
+		if se.tokenReq {
 			return a.checkActivation(account, imClaim, true)
 		}
 		// If we have a matching account we are authorized
-		_, ok := ea.approved[account.Name]
+		_, ok := se.approved[account.Name]
 		return ok
 	}
 	// ok if we are here we did not match directly so we need to test each one.
@@ -1396,16 +1939,16 @@ func (a *Account) checkServiceExportApproved(account *Account, subject string, i
 	// has to be a true subset of the import claim. We already checked for
 	// exact matches above.
 	tokens := strings.Split(subject, tsep)
-	for subj, ea := range a.exports.services {
+	for subj, se := range a.exports.services {
 		if isSubsetMatch(tokens, subj) {
-			if ea == nil || ea.approved == nil && !ea.tokenReq {
+			if se == nil || (se.approved == nil && !se.tokenReq) {
 				return true
 			}
 			// Check if token required
-			if ea.tokenReq {
+			if se.tokenReq {
 				return a.checkActivation(account, imClaim, true)
 			}
-			_, ok := ea.approved[account.Name]
+			_, ok := se.approved[account.Name]
 			return ok
 		}
 	}
@@ -1415,22 +1958,22 @@ func (a *Account) checkServiceExportApproved(account *Account, subject string, i
 // Helper function to get a serviceExport.
 // Lock should be held on entry.
 func (a *Account) getServiceExport(subj string) *serviceExport {
-	ea, ok := a.exports.services[subj]
+	se, ok := a.exports.services[subj]
 	// The export probably has a wildcard, so lookup that up.
 	if !ok {
-		ea = a.getWildcardServiceExport(subj)
+		se = a.getWildcardServiceExport(subj)
 	}
-	return ea
+	return se
 }
 
 // This helper is used when trying to match a serviceExport record that is
 // represented by a wildcard.
 // Lock should be held on entry.
-func (a *Account) getWildcardServiceExport(to string) *serviceExport {
-	tokens := strings.Split(to, tsep)
-	for subj, ea := range a.exports.services {
+func (a *Account) getWildcardServiceExport(from string) *serviceExport {
+	tokens := strings.Split(from, tsep)
+	for subj, se := range a.exports.services {
 		if isSubsetMatch(tokens, subj) {
-			return ea
+			return se
 		}
 	}
 	return nil
@@ -1660,7 +2203,7 @@ func (a *Account) checkServiceImportAuthorized(account *Account, subject string,
 // Check if another account is authorized to route requests to this service.
 func (a *Account) checkServiceImportAuthorizedNoLock(account *Account, subject string, imClaim *jwt.Import) bool {
 	// Find the subject in the services list.
-	if a.exports.services == nil || !IsValidLiteralSubject(subject) {
+	if a.exports.services == nil {
 		return false
 	}
 	return a.checkServiceExportApproved(account, subject, imClaim)
@@ -1798,15 +2341,16 @@ func (s *Server) AccountResolver() AccountResolver {
 	return ar
 }
 
-// UpdateAccountClaims will call updateAccountClaims.
-func (s *Server) UpdateAccountClaims(a *Account, ac *jwt.AccountClaims) {
-	s.updateAccountClaims(a, ac)
+// isClaimAccount returns if this account is backed by a JWT claim.
+// Lock should be held.
+func (a *Account) isClaimAccount() bool {
+	return a.claimJWT != ""
 }
 
 // updateAccountClaims will update an existing account with new claims.
 // This will replace any exports or imports previously defined.
 // Lock MUST NOT be held upon entry.
-func (s *Server) updateAccountClaims(a *Account, ac *jwt.AccountClaims) {
+func (s *Server) UpdateAccountClaims(a *Account, ac *jwt.AccountClaims) {
 	s.updateAccountClaimsWithRefresh(a, ac, true)
 }
 
@@ -1826,6 +2370,8 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 	old := &Account{Name: a.Name, exports: a.exports, limits: a.limits, signingKeys: a.signingKeys}
 
 	// Reset exports and imports here.
+
+	// Exports is creating a whole new map.
 	a.exports = exportMap{}
 
 	// Imports are checked unlocked in processInbound, so we can't change out the struct here. Need to process inline.
@@ -1840,6 +2386,7 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 		old.imports.services[k] = v
 		delete(a.imports.services, k)
 	}
+
 	// Reset any notion of export revocations.
 	a.actsRevoked = nil
 
@@ -1873,6 +2420,16 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 		return clients
 	}
 
+	jsEnabled := s.JetStreamEnabled()
+	if jsEnabled && a == s.SystemAccount() {
+		for _, export := range allJsExports {
+			s.Debugf("Adding jetstream service export %q for %s", export, a.Name)
+			if err := a.AddServiceExport(export, nil); err != nil {
+				s.Errorf("Error setting up jetstream service exports: %v", err)
+			}
+		}
+	}
+
 	for _, e := range ac.Exports {
 		switch e.Type {
 		case jwt.Stream:
@@ -1885,7 +2442,7 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 			rt := Singleton
 			switch e.ResponseType {
 			case jwt.ResponseTypeStream:
-				rt = Stream
+				rt = Streamed
 			case jwt.ResponseTypeChunked:
 				rt = Chunked
 			}
@@ -1912,7 +2469,14 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 	}
 	var incompleteImports []*jwt.Import
 	for _, i := range ac.Imports {
-		acc, err := s.lookupAccount(i.Account)
+		// check tmpAccounts with priority
+		var acc *Account
+		var err error
+		if v, ok := s.tmpAccounts.Load(i.Account); ok {
+			acc = v.(*Account)
+		} else {
+			acc, err = s.lookupAccount(i.Account)
+		}
 		if acc == nil || err != nil {
 			s.Errorf("Can't locate account [%s] for import of [%v] %s (err=%v)", i.Account, i.Subject, i.Type, err)
 			incompleteImports = append(incompleteImports, i)
@@ -1926,6 +2490,7 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 				incompleteImports = append(incompleteImports, i)
 			}
 		case jwt.Service:
+			// FIXME(dlc) - need to add in respThresh here eventually.
 			s.Debugf("Adding service import %s:%q for %s:%q", acc.Name, i.Subject, a.Name, i.To)
 			if err := a.AddServiceImportWithClaim(acc, string(i.Subject), string(i.To), i); err != nil {
 				s.Debugf("Error adding service import to account [%s]: %v", a.Name, err.Error())
@@ -1985,15 +2550,35 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 			// to lock "acc". If we find that to be needed, we will need to
 			// rework this to ensure we don't lock acc.
 			acc.mu.Lock()
-			for _, im := range acc.imports.services {
-				if im != nil && im.acc.Name == a.Name {
+			for _, si := range acc.imports.services {
+				if si != nil && si.acc.Name == a.Name {
 					// Check for if we are still authorized for an import.
-					im.invalid = !a.checkServiceImportAuthorized(acc, im.to, im.claim)
+					si.invalid = !a.checkServiceImportAuthorized(acc, si.to, si.claim)
+					if si.latency != nil && !si.response {
+						// Make sure we should still be tracking latency.
+						if se := a.getServiceExport(si.to); se != nil {
+							si.latency = se.latency
+						}
+					}
 				}
 			}
 			acc.mu.Unlock()
 			return true
 		})
+	}
+
+	// Now make sure we shutdown the old service import subscriptions.
+	var sids [][]byte
+	a.mu.RLock()
+	c := a.ic
+	for _, si := range old.imports.services {
+		if c != nil && si.sid != nil {
+			sids = append(sids, si.sid)
+		}
+	}
+	a.mu.RUnlock()
+	for _, sid := range sids {
+		c.processUnsub(sid)
 	}
 
 	// Now do limits if they are present.
@@ -2011,9 +2596,27 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 			a.usersRevoked[pk] = t
 		}
 	}
+	a.defaultPerms = buildPermissionsFromJwt(&ac.DefaultPermissions)
 	a.incomplete = len(incompleteImports) != 0
 	for _, i := range incompleteImports {
 		s.incompleteAccExporterMap.Store(i.Account, struct{}{})
+	}
+	if a.srv == nil {
+		a.srv = s
+	}
+	if jsEnabled {
+		if ac.Limits.JetStreamLimits.DiskStorage != 0 || ac.Limits.JetStreamLimits.MemoryStorage != 0 {
+			// JetStreamAccountLimits and jwt.JetStreamLimits use same value for unlimited
+			a.jsLimits = &JetStreamAccountLimits{
+				MaxMemory:    ac.Limits.JetStreamLimits.MemoryStorage,
+				MaxStore:     ac.Limits.JetStreamLimits.DiskStorage,
+				MaxStreams:   int(ac.Limits.JetStreamLimits.Streams),
+				MaxConsumers: int(ac.Limits.JetStreamLimits.Consumer),
+			}
+		} else if a.jsLimits != nil {
+			// covers failed update followed by disable
+			a.jsLimits = nil
+		}
 	}
 	a.mu.Unlock()
 
@@ -2024,6 +2627,17 @@ func (s *Server) updateAccountClaimsWithRefresh(a *Account, ac *jwt.AccountClaim
 			return clients[i].start.After(clients[j].start)
 		})
 	}
+
+	if jsEnabled {
+		if err := s.configJetStream(a); err != nil {
+			s.Errorf("Error configuring jetstream for account [%s]: %v", a.Name, err.Error())
+			a.mu.Lock()
+			// Absent reload of js server cfg, this is going to be broken until js is disabled
+			a.incomplete = true
+			a.mu.Unlock()
+		}
+	}
+
 	now := time.Now().Unix()
 	for i, c := range clients {
 		a.mu.RLock()
@@ -2109,20 +2723,17 @@ func (s *Server) buildInternalAccount(ac *jwt.AccountClaims) *Account {
 	// being built, however, to solve circular import dependencies, we
 	// need to store it here.
 	s.tmpAccounts.Store(ac.Subject, acc)
-	s.updateAccountClaims(acc, ac)
+	s.UpdateAccountClaims(acc, ac)
 	return acc
 }
 
-// Helper to build internal NKeyUser.
-func buildInternalNkeyUser(uc *jwt.UserClaims, acc *Account) *NkeyUser {
-	nu := &NkeyUser{Nkey: uc.Subject, Account: acc}
-	if uc.IssuerAccount != "" {
-		nu.SigningKey = uc.Issuer
+// Helper to build Permissions from jwt.Permissions
+// or return nil if none were specified
+func buildPermissionsFromJwt(uc *jwt.Permissions) *Permissions {
+	if uc == nil {
+		return nil
 	}
-
-	// Now check for permissions.
 	var p *Permissions
-
 	if len(uc.Pub.Allow) > 0 || len(uc.Pub.Deny) > 0 {
 		if p == nil {
 			p = &Permissions{}
@@ -2149,20 +2760,69 @@ func buildInternalNkeyUser(uc *jwt.UserClaims, acc *Account) *NkeyUser {
 		}
 		validateResponsePermissions(p)
 	}
+	return p
+}
+
+// Helper to build internal NKeyUser.
+func buildInternalNkeyUser(uc *jwt.UserClaims, acts map[string]struct{}, acc *Account) *NkeyUser {
+	nu := &NkeyUser{Nkey: uc.Subject, Account: acc, AllowedConnectionTypes: acts}
+	if uc.IssuerAccount != "" {
+		nu.SigningKey = uc.Issuer
+	}
+
+	// Now check for permissions.
+	var p = buildPermissionsFromJwt(&uc.Permissions)
+	if p == nil && acc.defaultPerms != nil {
+		p = acc.defaultPerms.clone()
+	}
 	nu.Permissions = p
 	return nu
 }
+
+const fetchTimeout = 2 * time.Second
 
 // AccountResolver interface. This is to fetch Account JWTs by public nkeys
 type AccountResolver interface {
 	Fetch(name string) (string, error)
 	Store(name, jwt string) error
+	IsReadOnly() bool
+	Start(server *Server) error
+	IsTrackingUpdate() bool
+	Reload() error
+	Close()
+}
+
+// Default implementations of IsReadOnly/Start so only need to be written when changed
+type resolverDefaultsOpsImpl struct{}
+
+func (*resolverDefaultsOpsImpl) IsReadOnly() bool {
+	return true
+}
+
+func (*resolverDefaultsOpsImpl) IsTrackingUpdate() bool {
+	return false
+}
+
+func (*resolverDefaultsOpsImpl) Start(*Server) error {
+	return nil
+}
+
+func (*resolverDefaultsOpsImpl) Reload() error {
+	return nil
+}
+
+func (*resolverDefaultsOpsImpl) Close() {
+}
+
+func (*resolverDefaultsOpsImpl) Store(_, _ string) error {
+	return fmt.Errorf("Store operation not supported for URL Resolver")
 }
 
 // MemAccResolver is a memory only resolver.
 // Mostly for testing.
 type MemAccResolver struct {
 	sm sync.Map
+	resolverDefaultsOpsImpl
 }
 
 // Fetch will fetch the account jwt claims from the internal sync.Map.
@@ -2179,10 +2839,15 @@ func (m *MemAccResolver) Store(name, jwt string) error {
 	return nil
 }
 
+func (ur *MemAccResolver) IsReadOnly() bool {
+	return false
+}
+
 // URLAccResolver implements an http fetcher.
 type URLAccResolver struct {
 	url string
 	c   *http.Client
+	resolverDefaultsOpsImpl
 }
 
 // NewURLAccResolver returns a new resolver for the given base URL.
@@ -2190,7 +2855,6 @@ func NewURLAccResolver(url string) (*URLAccResolver, error) {
 	if !strings.HasSuffix(url, "/") {
 		url += "/"
 	}
-
 	// FIXME(dlc) - Make timeout and others configurable.
 	// We create our own transport to amortize TLS.
 	tr := &http.Transport{
@@ -2199,7 +2863,7 @@ func NewURLAccResolver(url string) (*URLAccResolver, error) {
 	}
 	ur := &URLAccResolver{
 		url: url,
-		c:   &http.Client{Timeout: 2 * time.Second, Transport: tr},
+		c:   &http.Client{Timeout: fetchTimeout, Transport: tr},
 	}
 	return ur, nil
 }
@@ -2224,7 +2888,290 @@ func (ur *URLAccResolver) Fetch(name string) (string, error) {
 	return string(body), nil
 }
 
-// Store is not implemented for URL Resolver.
-func (ur *URLAccResolver) Store(name, jwt string) error {
-	return fmt.Errorf("Store operation not supported for URL Resolver")
+// Resolver based on nats for synchronization and backing directory for storage.
+type DirAccResolver struct {
+	*DirJWTStore
+	syncInterval time.Duration
+}
+
+func (dr *DirAccResolver) IsTrackingUpdate() bool {
+	return true
+}
+
+func respondToUpdate(s *Server, respSubj string, acc string, message string, err error) {
+	if err == nil {
+		s.Debugf("%s - %s", message, acc)
+	} else {
+		s.Errorf("%s - %s - %s", message, acc, err)
+	}
+	if respSubj == "" {
+		return
+	}
+	server := &ServerInfo{}
+	response := map[string]interface{}{"server": server}
+	if err == nil {
+		response["data"] = map[string]interface{}{
+			"code":    http.StatusOK,
+			"account": acc,
+			"message": message,
+		}
+	} else {
+		response["error"] = map[string]interface{}{
+			"code":        http.StatusInternalServerError,
+			"account":     acc,
+			"description": fmt.Sprintf("%s - %v", message, err),
+		}
+	}
+	s.sendInternalMsgLocked(respSubj, _EMPTY_, server, response)
+}
+
+func (dr *DirAccResolver) Start(s *Server) error {
+	dr.Lock()
+	defer dr.Unlock()
+	dr.DirJWTStore.changed = func(pubKey string) {
+		if v, ok := s.accounts.Load(pubKey); !ok {
+		} else if jwt, err := dr.LoadAcc(pubKey); err != nil {
+			s.Errorf("update got error on load: %v", err)
+		} else if err := s.updateAccountWithClaimJWT(v.(*Account), jwt); err != nil {
+			s.Errorf("update resulted in error %v", err)
+		}
+	}
+	packRespIb := s.newRespInbox()
+	for _, reqSub := range []string{accUpdateEventSubjOld, accUpdateEventSubjNew} {
+		// subscribe to account jwt update requests
+		if _, err := s.sysSubscribe(fmt.Sprintf(reqSub, "*"), func(_ *subscription, _ *client, subj, resp string, msg []byte) {
+			pubKey := ""
+			tk := strings.Split(subj, tsep)
+			if len(tk) == accUpdateTokensNew {
+				pubKey = tk[accReqAccIndex]
+			} else if len(tk) == accUpdateTokensOld {
+				pubKey = tk[accUpdateAccIdxOld]
+			} else {
+				s.Debugf("jwt update skipped due to bad subject %q", subj)
+				return
+			}
+			if claim, err := jwt.DecodeAccountClaims(string(msg)); err != nil {
+				respondToUpdate(s, resp, pubKey, "jwt update resulted in error", err)
+			} else if claim.Subject != pubKey {
+				err := errors.New("subject does not match jwt content")
+				respondToUpdate(s, resp, pubKey, "jwt update resulted in error", err)
+			} else if err := dr.save(pubKey, string(msg)); err != nil {
+				respondToUpdate(s, resp, pubKey, "jwt update resulted in error", err)
+			} else {
+				respondToUpdate(s, resp, pubKey, "jwt updated", nil)
+			}
+		}); err != nil {
+			return fmt.Errorf("error setting up update handling: %v", err)
+		}
+	}
+	if _, err := s.sysSubscribe(fmt.Sprintf(accLookupReqSubj, "*"), func(_ *subscription, _ *client, subj, reply string, msg []byte) {
+		// respond to lookups with our version
+		if reply == "" {
+			return
+		}
+		tk := strings.Split(subj, tsep)
+		if len(tk) != accLookupReqTokens {
+			return
+		}
+		if theJWT, err := dr.DirJWTStore.LoadAcc(tk[accReqAccIndex]); err != nil {
+			s.Errorf("Merging resulted in error: %v", err)
+		} else {
+			s.sendInternalMsgLocked(reply, "", nil, []byte(theJWT))
+		}
+	}); err != nil {
+		return fmt.Errorf("error setting up lookup request handling: %v", err)
+	} else if _, err = s.sysSubscribeQ(accPackReqSubj, "responder",
+		// respond to pack requests with one or more pack messages
+		// an empty message signifies the end of the response responder
+		func(_ *subscription, _ *client, _, reply string, theirHash []byte) {
+			if reply == "" {
+				return
+			}
+			ourHash := dr.DirJWTStore.Hash()
+			if bytes.Equal(theirHash, ourHash[:]) {
+				s.sendInternalMsgLocked(reply, "", nil, []byte{})
+				s.Debugf("pack request matches hash %x", ourHash[:])
+			} else if err := dr.DirJWTStore.PackWalk(1, func(partialPackMsg string) {
+				s.sendInternalMsgLocked(reply, "", nil, []byte(partialPackMsg))
+			}); err != nil {
+				// let them timeout
+				s.Errorf("pack request error: %v", err)
+			} else {
+				s.Debugf("pack request hash %x - finished responding with hash %x")
+				s.sendInternalMsgLocked(reply, "", nil, []byte{})
+			}
+		}); err != nil {
+		return fmt.Errorf("error setting up pack request handling: %v", err)
+	} else if _, err = s.sysSubscribe(packRespIb, func(_ *subscription, _ *client, _, _ string, msg []byte) {
+		// embed pack responses into store
+		hash := dr.DirJWTStore.Hash()
+		if len(msg) == 0 { // end of response stream
+			s.Debugf("Merging Finished and resulting in: %x", dr.DirJWTStore.Hash())
+			return
+		} else if err := dr.DirJWTStore.Merge(string(msg)); err != nil {
+			s.Errorf("Merging resulted in error: %v", err)
+		} else {
+			s.Debugf("Merging succeeded and changed %x to %x", hash, dr.DirJWTStore.Hash())
+		}
+	}); err != nil {
+		return fmt.Errorf("error setting up pack response handling: %v", err)
+	}
+	// periodically send out pack message
+	quit := s.quitCh
+	s.startGoRoutine(func() {
+		defer s.grWG.Done()
+		ticker := time.NewTicker(dr.syncInterval)
+		for {
+			select {
+			case <-quit:
+				ticker.Stop()
+				return
+			case <-ticker.C:
+			}
+			ourHash := dr.DirJWTStore.Hash()
+			s.Debugf("Checking store state: %x", ourHash)
+			s.sendInternalMsgLocked(accPackReqSubj, packRespIb, nil, ourHash[:])
+		}
+	})
+	s.Noticef("Managing all jwt in exclusive directory %s", dr.directory)
+	return nil
+}
+
+func (dr *DirAccResolver) Fetch(name string) (string, error) {
+	return dr.LoadAcc(name)
+}
+
+func (dr *DirAccResolver) Store(name, jwt string) error {
+	return dr.saveIfNewer(name, jwt)
+}
+
+func NewDirAccResolver(path string, limit int64, syncInterval time.Duration) (*DirAccResolver, error) {
+	if limit == 0 {
+		limit = math.MaxInt64
+	}
+	if syncInterval <= 0 {
+		syncInterval = time.Minute
+	}
+	store, err := NewExpiringDirJWTStore(path, false, true, 0, limit, false, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &DirAccResolver{store, syncInterval}, nil
+}
+
+// Caching resolver using nats for lookups and making use of a directory for storage
+type CacheDirAccResolver struct {
+	DirAccResolver
+	*Server
+	ttl time.Duration
+}
+
+func (dr *CacheDirAccResolver) Fetch(name string) (string, error) {
+	if theJWT, _ := dr.LoadAcc(name); theJWT != "" {
+		return theJWT, nil
+	}
+	// lookup from other server
+	s := dr.Server
+	if s == nil {
+		return "", ErrNoAccountResolver
+	}
+	respC := make(chan []byte, 1)
+	accountLookupRequest := fmt.Sprintf(accLookupReqSubj, name)
+	s.mu.Lock()
+	replySubj := s.newRespInbox()
+	if s.sys == nil || s.sys.replies == nil {
+		s.mu.Unlock()
+		return "", fmt.Errorf("eventing shut down")
+	}
+	replies := s.sys.replies
+	// Store our handler.
+	replies[replySubj] = func(sub *subscription, _ *client, subject, _ string, msg []byte) {
+		clone := make([]byte, len(msg))
+		copy(clone, msg)
+		s.mu.Lock()
+		if _, ok := replies[replySubj]; ok {
+			respC <- clone // only send if there is still interest
+		}
+		s.mu.Unlock()
+	}
+	s.sendInternalMsg(accountLookupRequest, replySubj, nil, []byte{})
+	quit := s.quitCh
+	s.mu.Unlock()
+	var err error
+	var theJWT string
+	select {
+	case <-quit:
+		err = errors.New("fetching jwt failed due to shutdown")
+	case <-time.After(fetchTimeout):
+		err = errors.New("fetching jwt timed out")
+	case m := <-respC:
+		if err = dr.Store(name, string(m)); err == nil {
+			theJWT = string(m)
+		}
+	}
+	s.mu.Lock()
+	delete(replies, replySubj)
+	s.mu.Unlock()
+	close(respC)
+	return theJWT, err
+}
+
+func NewCacheDirAccResolver(path string, limit int64, ttl time.Duration) (*CacheDirAccResolver, error) {
+	if limit <= 0 {
+		limit = 1_000
+	}
+	store, err := NewExpiringDirJWTStore(path, false, true, 0, limit, true, ttl, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &CacheDirAccResolver{DirAccResolver{store, 0}, nil, ttl}, nil
+}
+
+func (dr *CacheDirAccResolver) Start(s *Server) error {
+	dr.Lock()
+	defer dr.Unlock()
+	dr.Server = s
+	dr.DirJWTStore.changed = func(pubKey string) {
+		if v, ok := s.accounts.Load(pubKey); !ok {
+		} else if jwt, err := dr.LoadAcc(pubKey); err != nil {
+			s.Errorf("update got error on load: %v", err)
+		} else if err := s.updateAccountWithClaimJWT(v.(*Account), jwt); err != nil {
+			s.Errorf("update resulted in error %v", err)
+		}
+	}
+	for _, reqSub := range []string{accUpdateEventSubjOld, accUpdateEventSubjNew} {
+		// subscribe to account jwt update requests
+		if _, err := s.sysSubscribe(fmt.Sprintf(reqSub, "*"), func(_ *subscription, _ *client, subj, resp string, msg []byte) {
+			pubKey := ""
+			tk := strings.Split(subj, tsep)
+			if len(tk) == accUpdateTokensNew {
+				pubKey = tk[accReqAccIndex]
+			} else if len(tk) == accUpdateTokensOld {
+				pubKey = tk[accUpdateAccIdxOld]
+			} else {
+				s.Debugf("jwt update cache skipped due to bad subject %q", subj)
+				return
+			}
+			if claim, err := jwt.DecodeAccountClaims(string(msg)); err != nil {
+				respondToUpdate(s, resp, pubKey, "jwt update cache resulted in error", err)
+			} else if claim.Subject != pubKey {
+				err := errors.New("subject does not match jwt content")
+				respondToUpdate(s, resp, pubKey, "jwt update cache resulted in error", err)
+			} else if _, ok := s.accounts.Load(pubKey); !ok {
+				respondToUpdate(s, resp, pubKey, "jwt update cache skipped", nil)
+			} else if err := dr.save(pubKey, string(msg)); err != nil {
+				respondToUpdate(s, resp, pubKey, "jwt update cache resulted in error", err)
+			} else {
+				respondToUpdate(s, resp, pubKey, "jwt updated cache", nil)
+			}
+		}); err != nil {
+			return fmt.Errorf("error setting up update handling: %v", err)
+		}
+	}
+	s.Noticef("Managing some jwt in exclusive directory %s", dr.directory)
+	return nil
+}
+
+func (dr *CacheDirAccResolver) Reload() error {
+	return dr.DirAccResolver.Reload()
 }
