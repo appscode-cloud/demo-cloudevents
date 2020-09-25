@@ -21,13 +21,13 @@ func main() {
 	defer s.Shutdown()
 	nc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")))
 
-	stream, err := AddStream("ORDERS", nc)
+	stream, err := AddStream("ReceivedEvents", "user.*.Events", nc)
 	if err != nil {
 		panic(err)
 	}
 	log.Printf("A stream named `%s` has been created", stream.Name())
 
-	consumer, err := AddConsumer("NEW", "ORDERS.processed", stream.Name(), nc)
+	consumer, err := AddConsumer("ProcessEvents", "user.*.Events", stream.Name(), nc)
 	if err != nil {
 		panic(err)
 	}
@@ -67,9 +67,9 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 	return s, nc, nil
 }
 
-func AddStream(name string, nc *nats.Conn) (*jsm.Stream, error) {
+func AddStream(name, subject string, nc *nats.Conn) (*jsm.Stream, error) {
 	stream, err := jsm.NewStreamFromDefault(name, jsm.DefaultWorkQueue, jsm.StreamConnection(
-		jsm.WithConnection(nc)), jsm.Subjects(name+".*"), jsm.FileStorage(), jsm.MaxAge(24*365*time.Hour),
+		jsm.WithConnection(nc)), jsm.Subjects(subject), jsm.FileStorage(), jsm.MaxAge(24*365*time.Hour),
 		jsm.DiscardOld(), jsm.MaxMessages(-1), jsm.MaxBytes(-1), jsm.MaxMessageSize(512),
 		jsm.DuplicateWindow(1*time.Hour))
 	if err != nil {

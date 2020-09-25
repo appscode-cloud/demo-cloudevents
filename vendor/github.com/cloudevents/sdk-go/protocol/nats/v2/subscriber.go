@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"fmt"
 	"github.com/nats-io/jsm.go"
 	"github.com/nats-io/nats.go"
 	"time"
@@ -72,6 +73,11 @@ func (s *PullConsumer) Subscribe(conn *nats.Conn, consumer string, cb nats.MsgHa
 					continue
 				}
 				if err == nil {
+					println("\n")
+					println("<<------------------------------------->>")
+					fmt.Println(msg.Subject, string(msg.Data))
+					println("<<------------------------------------->>")
+					println("\n")
 					cb(msg)
 					_ = msg.Respond(nil)
 				}

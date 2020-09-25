@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -17,7 +18,16 @@ func main() {
 	}
 	defer nc.Close()
 
-	if err := nc.Publish("Events", []byte("Hello there...")); err != nil {
+	msg := map[string]string{
+		"id": "000000000000000",
+		"message": "Hello there...",
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := nc.Publish("Events", data); err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("Published message to %s channel...", "Events")
