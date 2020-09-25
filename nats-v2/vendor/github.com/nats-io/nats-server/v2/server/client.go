@@ -212,7 +212,7 @@ type client struct {
 	nonce      []byte
 	pubKey     string
 	nc         net.Conn
-	ncs        atomic.Value
+	ncs        string
 	out        outbound
 	user       *NkeyUser
 	host       string
@@ -366,12 +366,7 @@ type perAccountCache struct {
 }
 
 func (c *client) String() (id string) {
-	loaded := c.ncs.Load()
-	if loaded != nil {
-		return loaded.(string)
-	}
-
-	return ""
+	return c.ncs
 }
 
 // GetName returns the application supplied name for the connection.
@@ -514,19 +509,19 @@ func (c *client) initClient() {
 		if c.ws != nil {
 			name = "wid"
 		}
-		c.ncs.Store(fmt.Sprintf("%s - %s:%d", conn, name, c.cid))
+		c.ncs = fmt.Sprintf("%s - %s:%d", conn, name, c.cid)
 	case ROUTER:
-		c.ncs.Store(fmt.Sprintf("%s - rid:%d", conn, c.cid))
+		c.ncs = fmt.Sprintf("%s - rid:%d", conn, c.cid)
 	case GATEWAY:
-		c.ncs.Store(fmt.Sprintf("%s - gid:%d", conn, c.cid))
+		c.ncs = fmt.Sprintf("%s - gid:%d", conn, c.cid)
 	case LEAF:
-		c.ncs.Store(fmt.Sprintf("%s - lid:%d", conn, c.cid))
+		c.ncs = fmt.Sprintf("%s - lid:%d", conn, c.cid)
 	case SYSTEM:
-		c.ncs.Store("SYSTEM")
+		c.ncs = "SYSTEM"
 	case JETSTREAM:
-		c.ncs.Store("JETSTREAM")
+		c.ncs = "JETSTREAM"
 	case ACCOUNT:
-		c.ncs.Store("ACCOUNT")
+		c.ncs = "ACCOUNT"
 	}
 }
 
@@ -1541,30 +1536,6 @@ func (c *client) processConnect(arg []byte) error {
 	lang := c.opts.Lang
 	account := c.opts.Account
 	accountNew := c.opts.AccountNew
-
-	if c.kind == CLIENT {
-		var ncs string
-		if c.opts.Version != "" {
-			ncs = fmt.Sprintf("v%s", c.opts.Version)
-		}
-		if c.opts.Lang != "" {
-			if c.opts.Version == _EMPTY_ {
-				ncs = c.opts.Lang
-			} else {
-				ncs = fmt.Sprintf("%s:%s", ncs, c.opts.Lang)
-			}
-		}
-		if c.opts.Name != "" {
-			if c.opts.Version == _EMPTY_ && c.opts.Lang == _EMPTY_ {
-				ncs = c.opts.Name
-			} else {
-				ncs = fmt.Sprintf("%s:%s", ncs, c.opts.Name)
-			}
-		}
-		if ncs != _EMPTY_ {
-			c.ncs.Store(fmt.Sprintf("%s - %q", c.String(), ncs))
-		}
-	}
 
 	// If websocket client and JWT not in the CONNECT, use the cookie JWT (possibly empty).
 	if ws := c.ws; ws != nil && c.opts.JWT == "" {

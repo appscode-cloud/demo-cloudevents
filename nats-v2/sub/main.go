@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
 
@@ -10,7 +11,8 @@ import (
 )
 
 func main() {
-	nc, err := nats.Connect("localhost:2224", nats.Name("Message Publisher"), nats.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds")))
+	nc, err := nats.Connect("localhost:4222", nats.Name("Message Subscriber"), /*nats.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds")),*/
+		nats.Token(fmt.Sprintf("_csrf %s", filepath.Join(confs.ConfDir, "admin.creds"))))
 	if err != nil {
 		log.Fatal(err)
 	}

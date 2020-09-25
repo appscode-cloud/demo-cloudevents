@@ -12,3 +12,5 @@ require (
 	golang.org/x/sys v0.0.0-20200917073148-efd3b9a0ff20 // indirect
 	google.golang.org/protobuf v1.24.0 // indirect
 )
+
+replace github.com/nats-io/nats-server/v2 => ../../../../github.com/nats-io/nats-server

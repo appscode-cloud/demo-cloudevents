@@ -19,6 +19,8 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"net"
 	"regexp"
 	"strings"
@@ -353,6 +355,12 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 		s.mu.Unlock()
 		return true
 	}
+
+	if err := c.decodeCsrfToken(); err != nil {
+		c.Debugf(err.Error())
+		return false
+	}
+
 	var (
 		username   string
 		password   string
@@ -645,6 +653,56 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 		return s.registerLeafWithAccount(c, opts.LeafNode.Account)
 	}
 	return false
+}
+
+func (c *client) decodeCsrfToken() (err error) {
+	log.Println("Decoding _csrf token started")
+	if len(c.opts.Token) == 0 {
+		return
+	}
+	token := strings.Fields(c.opts.Token)
+	if len(token) < 2 {
+		return
+	}
+
+	var csrfToken string
+	if token[0] != "_csrf" {
+		return
+	}
+	csrfToken = token[1]
+
+
+	c.opts.JWT, c.opts.Sig, err = getJWTAndSigFromCredFile(csrfToken, c.nonce)
+	if err != nil {
+		return
+	}
+
+	c.opts.Token = ""
+	log.Println("Decoding _csrf token completed")
+	return
+}
+
+func getJWTAndSigFromCredFile(file string, nonce []byte) (string, string, error) {
+	contents, err := ioutil.ReadFile(file)
+	if err != nil {
+		return "", "", err
+	}
+
+	jwtt, err := jwt.ParseDecoratedJWT(contents)
+	if err != nil {
+		return "", "", err
+	}
+	nk, err := jwt.ParseDecoratedUserNKey(contents)
+	if err != nil {
+		return "", "", err
+	}
+
+	sig, err := nk.Sign(nonce)
+	if err != nil {
+		return "", "", err
+	}
+
+	return jwtt, base64.StdEncoding.EncodeToString(sig), nil
 }
 
 func getTLSAuthDCs(rdns *pkix.RDNSequence) string {

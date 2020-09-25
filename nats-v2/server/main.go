@@ -62,7 +62,7 @@ func StartNATSServer() (*natsd.Server, error) {
 		return nil, errors.New("nats server didn't start")
 	}
 
-	log.Println("NATS Server 2.0 started...")
+	log.Printf("NATS Server 2.0 started at %s \n", srv.ClientURL())
 
 	return srv, nil
 }
