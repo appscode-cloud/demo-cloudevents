@@ -59,7 +59,7 @@ func main() {
 	}
 
 	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`host: localhost
-port: 2224
+port: 4222
 operator: %s
 resolver: URL(http://localhost:9090/jwt/v1/accounts/)
 system_account: %s`, confs.OpJwtPath, sPub)), 0666)
@@ -123,9 +123,9 @@ system_account: %s`, confs.OpJwtPath, sPub)), 0666)
 		},
 		&jwt.Import{
 			Name:    "Notifications",
-			Subject: "Notifications",
+			Subject: "a.Notifications",
 			Account: aPub,
-			To:      "a.Notifications",
+			To:      "Notifications",
 			Type:    jwt.Service,
 		},
 	}
@@ -164,7 +164,7 @@ func CreateOperator(name string) (oKp nkeys.KeyPair, oPub string, oSeed []byte, 
 	claim := jwt.OperatorClaims{
 		ClaimsData: jwt.ClaimsData{
 			Audience:  oPub,
-			Expires:   time.Now().Add(24 * time.Hour).Unix(),
+			Expires:   time.Now().AddDate(10, 0, 0).Unix(),
 			ID:        oPub,
 			IssuedAt:  time.Now().Unix(),
 			Issuer:    "Masudur Rahman",

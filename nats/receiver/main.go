@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
@@ -16,7 +17,7 @@ import (
 
 func main() {
 	con, err := nats.NewConsumer("nats://localhost:5222", "ProcessEvents",
-		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "a.creds"))), nats.WithPullConsumer("ReceivedEvents"))
+		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds"))), nats.WithPullConsumer("ReceivedEvents"))
 	if err != nil {
 		panic(err)
 	}
@@ -35,10 +36,10 @@ func main() {
 	}
 }
 
-type Example struct {
-	Sequence int    `json:"id"`
-	Message  string `json:"message"`
-}
+//type Example struct {
+//	Sequence int    `json:"id"`
+//	Message  string `json:"message"`
+//}
 
 func processEvents(ctx context.Context, event cloudevents.Event) error {
 	var data = make(map[string]interface{})
@@ -49,9 +50,9 @@ func processEvents(ctx context.Context, event cloudevents.Event) error {
 	oneliners.PrettyJson(event.Subject())
 	oneliners.PrettyJson(data)
 
-	//TODO: Send message to NATS/V2 server channel for user to listen
+	user := strings.Split(event.Subject(), ".")[1]
 
-	return SendNotificationToNatsServer("Notifications", data)
+	return SendNotificationToNatsServer(user+".Notifications", data)
 }
 
 func SendNotificationToNatsServer(subject string, data interface{}) error {

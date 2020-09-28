@@ -26,13 +26,7 @@ func main() {
 }
 
 func StartNATSServer() (*natsd.Server, error) {
-	if err := PushAccount(filepath.Join(confs.ConfDir, "SYS.jwt")); err != nil {
-		return nil, err
-	}
-	if err := PushAccount(filepath.Join(confs.ConfDir, "admin.jwt")); err != nil {
-		return nil, err
-	}
-	if err := PushAccount(filepath.Join(confs.ConfDir, "A.jwt")); err != nil {
+	if err := pushAccount(nil, filepath.Join(confs.ConfDir, "SYS.jwt")); err != nil {
 		return nil, err
 	}
 	opts := &natsd.Options{
@@ -62,6 +56,13 @@ func StartNATSServer() (*natsd.Server, error) {
 		return nil, errors.New("nats server didn't start")
 	}
 
+	if err := pushAccount(srv.AccountResolver(), filepath.Join(confs.ConfDir, "admin.jwt")); err != nil {
+		return nil, err
+	}
+	if err := pushAccount(srv.AccountResolver(), filepath.Join(confs.ConfDir, "A.jwt")); err != nil {
+		return nil, err
+	}
+
 	log.Printf("NATS Server 2.0 started at %s \n", srv.ClientURL())
 
 	return srv, nil
@@ -88,4 +89,22 @@ func PushAccount(file string) error {
 	defer resp.Body.Close()
 	//message, err := ioutil.ReadAll(resp.Body)
 	return nil
+}
+
+func pushAccount(ur natsd.AccountResolver, file string) (err error) {
+	if ur == nil {
+		ur, err = natsd.NewURLAccResolver("http://localhost:9090/jwt/v1/accounts/")
+		if err != nil {
+			return
+		}
+	}
+	data, err := ioutil.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	c, err := jwt.DecodeAccountClaims(string(data))
+	if err != nil {
+		return err
+	}
+	return ur.Store(c.Subject, string(data))
 }

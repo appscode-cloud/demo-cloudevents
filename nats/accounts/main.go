@@ -68,15 +68,15 @@ system_account: %s`, confs.OpJwtPath, confs.ConfDir, sPub)), 0666)
 		panic(err)
 	}
 
-	aKp, aPub, aJwt, err := CreateAccount("A", oKp)
+	aKp, aPub, aJwt, err := CreateAccount("Admin", oKp)
 	if err != nil {
 		panic(err)
 	}
-	_, _, _, aCreds, err := CreateUser("a", aKp)
+	_, _, _, aCreds, err := CreateUser("admin", aKp)
 	if err != nil {
 		panic(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "a.creds"), aCreds, 0666); err != nil {
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.creds"), aCreds, 0666); err != nil {
 		panic(err)
 	}
 
@@ -134,7 +134,7 @@ func CreateOperator(name string) (nkeys.KeyPair, string, []byte, string, error) 
 	claim := jwt.OperatorClaims{
 		ClaimsData: jwt.ClaimsData{
 			Audience:  oPub,
-			Expires:   time.Now().Add(24 * time.Hour).Unix(),
+			Expires:   time.Now().AddDate(10, 0, 0).Unix(),
 			ID:        oPub,
 			IssuedAt:  time.Now().Unix(),
 			Issuer:    "Masudur Rahman",

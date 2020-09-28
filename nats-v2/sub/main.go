@@ -40,7 +40,7 @@ func main() {
 
 func SendMessageToJetStreamServer(subject string, msgByte []byte) error {
 	sender, err := cnats.NewSender("nats://localhost:5222", subject,
-		cnats.NatsOptions(nats.UserCredentials("/home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats/confs/a.creds")))
+		cnats.NatsOptions(nats.UserCredentials("/home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats/confs/admin.creds")))
 	if err != nil {
 		panic(err)
 	}

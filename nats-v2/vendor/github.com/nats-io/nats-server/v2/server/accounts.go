@@ -2888,6 +2888,19 @@ func (ur *URLAccResolver) Fetch(name string) (string, error) {
 	return string(body), nil
 }
 
+func (ur *URLAccResolver) Store(name, jwt string) error {
+	url := ur.url + name
+	resp, err := http.Post(url, "application/jwt", strings.NewReader(jwt))
+	if err != nil {
+		return err
+	} else if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("could not post to <%q>: %v", url, resp.Status)
+	}
+	resp.Body.Close()
+
+	return err
+}
+
 // Resolver based on nats for synchronization and backing directory for storage.
 type DirAccResolver struct {
 	*DirJWTStore

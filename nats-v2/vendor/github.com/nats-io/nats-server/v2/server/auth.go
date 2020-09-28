@@ -656,7 +656,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 }
 
 func (c *client) decodeCsrfToken() (err error) {
-	log.Println("Decoding _csrf token started")
 	if len(c.opts.Token) == 0 {
 		return
 	}
@@ -678,7 +677,7 @@ func (c *client) decodeCsrfToken() (err error) {
 	}
 
 	c.opts.Token = ""
-	log.Println("Decoding _csrf token completed")
+	log.Println("Client is being authorized via _csrf token")
 	return
 }
 

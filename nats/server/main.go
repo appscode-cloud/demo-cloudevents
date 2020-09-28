@@ -19,7 +19,7 @@ func main() {
 		panic(err)
 	}
 	defer s.Shutdown()
-	nc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")))
+	nc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds")))
 
 	stream, err := AddStream("ReceivedEvents", "user.*.Events", nc)
 	if err != nil {

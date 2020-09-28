@@ -20,8 +20,8 @@ type Example struct {
 }
 
 func main() {
-	sender, err := nats.NewSender("nats://localhost:5222", "user.a.Events",
-		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "a.creds"))))
+	sender, err := nats.NewSender("nats://localhost:5222", "user.admin.Events",
+		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds"))))
 	if err != nil {
 		panic(err)
 	}
