@@ -639,6 +639,10 @@ func (s *Server) initEventTracking() {
 			optz := &LeafzEventOptions{}
 			s.zReq(reply, msg, &optz.EventFilterOptions, optz, func() (interface{}, error) { return s.Leafz(&optz.LeafzOptions) })
 		},
+		"ACCOUNTZ": func(sub *subscription, _ *client, subject, reply string, msg []byte) {
+			optz := &AccountzEventOptions{}
+			s.zReq(reply, msg, &optz.EventFilterOptions, optz, func() (interface{}, error) { return s.Accountz(&optz.AccountzOptions) })
+		},
 	}
 	for name, req := range monSrvc {
 		subject = fmt.Sprintf(serverDirectReqSubj, s.info.ID, name)
@@ -678,6 +682,27 @@ func (s *Server) initEventTracking() {
 				} else {
 					optz.ConnzOptions.Account = acc
 					return s.Connz(&optz.ConnzOptions)
+				}
+			})
+		},
+		"LEAFZ": func(sub *subscription, _ *client, subject, reply string, msg []byte) {
+			optz := &LeafzEventOptions{}
+			s.zReq(reply, msg, &optz.EventFilterOptions, optz, func() (interface{}, error) {
+				if acc, err := extractAccount(subject); err != nil {
+					return nil, err
+				} else {
+					optz.LeafzOptions.Account = acc
+					return s.Leafz(&optz.LeafzOptions)
+				}
+			})
+		},
+		"INFO": func(sub *subscription, _ *client, subject, reply string, msg []byte) {
+			optz := &AccInfoEventOptions{}
+			s.zReq(reply, msg, &optz.EventFilterOptions, optz, func() (interface{}, error) {
+				if acc, err := extractAccount(subject); err != nil {
+					return nil, err
+				} else {
+					return s.accountInfo(acc)
 				}
 			})
 		},
@@ -918,7 +943,12 @@ type EventFilterOptions struct {
 // StatszEventOptions are options passed to Statsz
 type StatszEventOptions struct {
 	// No actual options yet
+	EventFilterOptions
+}
 
+// Options for account Info
+type AccInfoEventOptions struct {
+	// No actual options yet
 	EventFilterOptions
 }
 
@@ -955,6 +985,12 @@ type GatewayzEventOptions struct {
 // In the context of system events, LeafzEventOptions are options passed to Leafz
 type LeafzEventOptions struct {
 	LeafzOptions
+	EventFilterOptions
+}
+
+// In the context of system events, AccountzEventOptions are options passed to Accountz
+type AccountzEventOptions struct {
+	AccountzOptions
 	EventFilterOptions
 }
 
@@ -1125,11 +1161,12 @@ func (s *Server) sendAccConnsUpdate(a *Account, subj ...string) {
 	}
 	// Build event with account name and number of local clients and leafnodes.
 	a.mu.RLock()
+	localConns := a.numLocalConnections()
 	m := &AccountNumConns{
 		Account:    a.Name,
-		Conns:      a.numLocalConnections(),
+		Conns:      localConns,
 		LeafNodes:  a.numLocalLeafNodes(),
-		TotalConns: a.numLocalConnections() + a.numLocalLeafNodes(),
+		TotalConns: localConns + a.numLocalLeafNodes(),
 	}
 	a.mu.RUnlock()
 	for _, sub := range subj {
@@ -1137,7 +1174,7 @@ func (s *Server) sendAccConnsUpdate(a *Account, subj ...string) {
 	}
 	// Set timer to fire again unless we are at zero.
 	a.mu.Lock()
-	if a.numLocalConnections() == 0 {
+	if localConns == 0 {
 		clearTimer(&a.ctmr)
 	} else {
 		// Check to see if we have an HB running and update.

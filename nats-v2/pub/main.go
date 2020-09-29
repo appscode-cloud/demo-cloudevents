@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"path/filepath"
 
@@ -11,15 +10,15 @@ import (
 )
 
 func main() {
-	nc, err := nats.Connect("localhost:4222", nats.Name("Message Publisher"), /*nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")))*/
-		nats.Token(fmt.Sprintf("_csrf %s", filepath.Join(confs.ConfDir, "a.creds"))))
+	nc, err := nats.Connect("localhost:4222", nats.Name("Message Publisher"), nats.UserCredentials(filepath.Join(confs.ConfDir, "a.creds")))
+	//nats.Token(fmt.Sprintf("_csrf %s", filepath.Join(confs.ConfDir, "a.creds"))))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer nc.Close()
 
 	msg := map[string]string{
-		"id": "000000000000000",
+		"id":      "000000000000000",
 		"message": "Hello there...",
 	}
 	data, err := json.Marshal(msg)

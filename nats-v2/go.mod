@@ -15,4 +15,4 @@ require (
 	google.golang.org/protobuf v1.24.0 // indirect
 )
 
-replace github.com/nats-io/nats-server/v2 => ../../../../github.com/nats-io/nats-server
+replace github.com/nats-io/nats-server/v2 => github.com/masudur-rahman/nats-server/v2 v2.1.8-0.20200929110001-c8c48f43e224

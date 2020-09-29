@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Simple</title>
+    <link
+      rel="stylesheet"
+      href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css"
+      crossorigin="anonymous"
+    />
+  </head>
+
+  <body>
+    <!-- a place to record messages -->
+    <div id="messages" class="container"></div>
+    <!-- load a script -->
+    <script type="module">
+      import { connect, StringCodec } from "./nats.mjs";
+
+      // add an entry to the document
+      function addEntry(s) {
+        const p = document.createElement("pre");
+        p.appendChild(document.createTextNode(s));
+        document.getElementById("messages").appendChild(p);
+      }
+
+      const sc = StringCodec();
+
+      const init = async function () {
+        // create a connection
+        const nc = await connect({
+          servers: "localhost:9222",
+          token: "_csrf /home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats-v2/confs/a.creds",
+          ws: true,
+        });
+        addEntry("connected to NATS!");
+
+        (async () => {
+          addEntry("listening to channel `Notifications`");
+          const chat = nc.subscribe("Notifications");
+          for await (const m of chat) {
+            addEntry(`message : ${sc.decode(m.data)}`);
+          }
+          addEntry("listened to channel `Notifications`");
+        })().then();
+
+        // (async () => {
+        //   await setInterval(() => {
+        //     nc.publish("Notifications", sc.encode("Hello there"));
+        //     addEntry("Published a message to `Notifications`");
+        //   }, 3000);
+        // })().then();
+      };
+      init();
+    </script>
+  </body>
+</html>
