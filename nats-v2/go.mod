@@ -5,6 +5,7 @@ go 1.14
 require (
 	github.com/cloudevents/sdk-go/protocol/nats/v2 v2.2.0
 	github.com/cloudevents/sdk-go/v2 v2.2.0
+	github.com/davecgh/go-spew v1.1.1
 	github.com/nats-io/jwt v1.0.1
 	github.com/nats-io/nats-server/v2 v2.1.8-0.20200923205306-12d84c646c79
 	github.com/nats-io/nats.go v1.10.1-0.20200606002146-fc6fed82929a

@@ -15,7 +15,12 @@
     <div id="messages" class="container"></div>
     <!-- load a script -->
     <script type="module">
-      import { connect, StringCodec } from "./nats.mjs";
+      import {
+        connect,
+        StringCodec,
+        jwtAuthenticator,
+        credsAuthenticator,
+      } from "./nats.mjs";
 
       // add an entry to the document
       function addEntry(s) {
@@ -24,13 +29,44 @@
         document.getElementById("messages").appendChild(p);
       }
 
+      function bytes(str) {
+        var data = [];
+
+        for (var i = 0; i < str.length; ++i) {
+          var code = str.charCodeAt(i);
+
+          data = data.concat([code]);
+        }
+
+        return data;
+      }
+
       const sc = StringCodec();
 
       const init = async function () {
         // create a connection
         const nc = await connect({
           servers: "localhost:9222",
-          token: "_csrf /home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats-v2/confs/a.creds",
+          authenticator: jwtAuthenticator(
+            "eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJqdGkiOiJLREUzUEdIRFFUSVlWMkdHUVVZNjVMTDVURVpBS0NHUFJQQVVGWjNTNlo1SFU0UkJRVE1BIiwiaWF0IjoxNjAxMjkyMTYzLCJpc3MiOiJBQUhJN0ZQRkc3WVNXTVM3TlYzSFNLQk5WVDNISUlVRFJNV0lNT0RRTVJYNjNXTkk3R1dUU0pSRyIsIm5hbWUiOiJhIiwic3ViIjoiVUJKMlo1TUFDREhMRzdIM01ZU0NVSlJaUVZYMjVQVFI1UEpUNVFLN0pBWFBWWjRDQzJNSVo0MlciLCJ0eXBlIjoidXNlciIsIm5hdHMiOnsicHViIjp7fSwic3ViIjp7fX19.L45r1adjdcTf3YwSi608k65M358j8orzxSU26UA8-xo6_L4aQKYXUGtq4DK0d3R_1ziwiLkAExEhvOI138iLAQ",
+            bytes("SUAOABL3SLRN3SAPXDBMLTV3KHBVBGN5SUVI54RIV57E662S456ICBZRBM")
+          ),
+          // authenticator: credsAuthenticator(
+          // bytes(`-----BEGIN NATS USER JWT-----
+          // eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJqdGkiOiJLREUzUEdIRFFUSVlWMkdHUVVZNjVMTDVURVpBS0NHUFJQQVVGWjNTNlo1SFU0UkJRVE1BIiwiaWF0IjoxNjAxMjkyMTYzLCJpc3MiOiJBQUhJN0ZQRkc3WVNXTVM3TlYzSFNLQk5WVDNISUlVRFJNV0lNT0RRTVJYNjNXTkk3R1dUU0pSRyIsIm5hbWUiOiJhIiwic3ViIjoiVUJKMlo1TUFDREhMRzdIM01ZU0NVSlJaUVZYMjVQVFI1UEpUNVFLN0pBWFBWWjRDQzJNSVo0MlciLCJ0eXBlIjoidXNlciIsIm5hdHMiOnsicHViIjp7fSwic3ViIjp7fX19.L45r1adjdcTf3YwSi608k65M358j8orzxSU26UA8-xo6_L4aQKYXUGtq4DK0d3R_1ziwiLkAExEhvOI138iLAQ
+          // ------END NATS USER JWT------
+
+          // ************************* IMPORTANT *************************
+          // NKEY Seed printed below can be used to sign and prove identity.
+          // NKEYs are sensitive and should be treated as secrets.
+
+          // -----BEGIN USER NKEY SEED-----
+          // SUAOABL3SLRN3SAPXDBMLTV3KHBVBGN5SUVI54RIV57E662S456ICBZRBM
+          // ------END USER NKEY SEED------
+
+          // *************************************************************
+          // `)),
+          // token: "_csrf /home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats-v2/confs/a.creds",
           ws: true,
         });
         addEntry("connected to NATS!");

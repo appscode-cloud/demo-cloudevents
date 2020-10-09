@@ -113,6 +113,17 @@ system_account: %s`, confs.OpJwtPath, sPub)), 0666)
 		panic(err)
 	}
 
+	//if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "adminn.jwt"), []byte(AJwt), 0666); err != nil {
+	//	panic(err)
+	//}
+	_, _, _, ACreds, err := CreateUser("admin", AKp)
+	if err != nil {
+		panic(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.creds"), ACreds, 0666); err != nil {
+		panic(err)
+	}
+
 	claim.Imports = jwt.Imports{
 		&jwt.Import{
 			Name:    "Events",
@@ -136,13 +147,13 @@ system_account: %s`, confs.OpJwtPath, sPub)), 0666)
 	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.jwt"), []byte(AJwt), 0666); err != nil {
 		panic(err)
 	}
-	_, _, _, ACreds, err := CreateUser("admin", AKp)
-	if err != nil {
-		panic(err)
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.creds"), ACreds, 0666); err != nil {
-		panic(err)
-	}
+	//_, _, _, ACreds, err := CreateUser("admin", AKp)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.creds"), ACreds, 0666); err != nil {
+	//	panic(err)
+	//}
 
 	log.Println("Everything is perfectly done, I guess...")
 }

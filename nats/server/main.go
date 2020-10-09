@@ -14,12 +14,16 @@ import (
 )
 
 func main() {
-	s, _, err := StartJSServer()
+	//s, _, err := StartJSServer()
+	//if err != nil {
+	//	panic(err)
+	//}
+	//defer s.Shutdown()
+	//fmt.Println(s.ClientURL())
+	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds")))
 	if err != nil {
 		panic(err)
 	}
-	defer s.Shutdown()
-	nc, err := nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds")))
 
 	stream, err := AddStream("ReceivedEvents", "user.*.Events", nc)
 	if err != nil {
@@ -33,8 +37,8 @@ func main() {
 	}
 	log.Printf("A consumer named `%s` has been created", consumer.Name())
 
-	var done chan bool
-	<-done
+	//var done chan bool
+	//<-done
 }
 
 func StartJSServer() (*natsd.Server, *nats.Conn, error) {

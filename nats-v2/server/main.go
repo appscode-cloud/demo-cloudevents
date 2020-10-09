@@ -15,7 +15,7 @@ import (
 	natsd "github.com/nats-io/nats-server/v2/server"
 )
 
-func main() {
+func main2() {
 	_, err := StartNATSServer()
 	if err != nil {
 		log.Fatal(err)
@@ -23,6 +23,18 @@ func main() {
 
 	var done chan bool
 	<-done
+}
+
+func main() {
+	if err := pushAccount(nil, filepath.Join(confs.ConfDir, "SYS.jwt")); err != nil {
+		panic(err)
+	}
+	if err := pushAccount(nil, filepath.Join(confs.ConfDir, "admin.jwt")); err != nil {
+		panic(err)
+	}
+	if err := pushAccount(nil, filepath.Join(confs.ConfDir, "A.jwt")); err != nil {
+		panic(err)
+	}
 }
 
 func StartNATSServer() (*natsd.Server, error) {
