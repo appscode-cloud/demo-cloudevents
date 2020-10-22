@@ -22,6 +22,7 @@ func main() {
 		panic(err)
 	}
 	defer con.Close(context.Background())
+	log.Println("Jetstream receiver to `ProcessEvents` started...")
 
 	client, err := cloudevents.NewClient(con)
 	if err != nil {
