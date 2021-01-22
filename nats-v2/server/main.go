@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"time"
+
+	"github.com/nats-io/nkeys"
 
 	"github.com/masudur-rahman/demo-cloudevents/nats/v2/confs"
 	"github.com/nats-io/jwt"
@@ -25,16 +28,34 @@ func main2() {
 	<-done
 }
 
+var (
+	oSeed = []byte("SOABIGQTSJ52CEO2VWYUT73GJLNO3J2H7L6HVOOD6AFGKY35ZXG4QJFW7M")
+	oJwt  = "eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJhdWQiOiJPQ0NPS1NEQjVTWldaS1ZZSkxaM1ZNWFNMVUNRMlJaTVBDWVFPTENIQTU3WkJCVDNGQ0NCU0xQMyIsImV4cCI6MTYwMDg0MTU2MCwianRpIjoiNzJOQUNLR0dFNVhaRzZXWlpGSFhLTUNBWVFZN0k2U0JDREtPMkYzQkNYWUhTUldHVlRHUSIsImlhdCI6MTYwMDc1NTE2MCwiaXNzIjoiT0NDT0tTREI1U1pXWktWWUpMWjNWTVhTTFVDUTJSWk1QQ1lRT0xDSEE1N1pCQlQzRkNDQlNMUDMiLCJuYW1lIjoiS08iLCJuYmYiOjE2MDA3NTUxNjAsInN1YiI6Ik9DQ09LU0RCNVNaV1pLVllKTFozVk1YU0xVQ1EyUlpNUENZUU9MQ0hBNTdaQkJUM0ZDQ0JTTFAzIiwidHlwZSI6Im9wZXJhdG9yIiwibmF0cyI6eyJzaWduaW5nX2tleXMiOlsiT0NDT0tTREI1U1pXWktWWUpMWjNWTVhTTFVDUTJSWk1QQ1lRT0xDSEE1N1pCQlQzRkNDQlNMUDMiXX19.kCFsvOgD2omZmgnWAV1VeJTaZVnunOVQRxpK2IsqFWl2RY8CIVkekSp7PRIAobL5u8y2E1RBg8JLib4ddRk2Cw"
+	oKp   nkeys.KeyPair
+)
+
+func init() {
+	var err error
+	oKp, err = nkeys.FromSeed(oSeed)
+	if err != nil {
+		panic(fmt.Sprintf("Parsing oSeed failed with: %v", err))
+	}
+}
 func main() {
+	//if Jwt, err := FetchAccount("ADOJV57ED3AMUGZEWSBIZCX6L55PXNOXXSABGOSHB6LOOE2S4PEVZ3PO"); err != nil {
+	//	panic(err)
+	//} else {
+	//	fmt.Println(Jwt)
+	//}
 	if err := pushAccount(nil, filepath.Join(confs.ConfDir, "SYS.jwt")); err != nil {
 		panic(err)
 	}
 	if err := pushAccount(nil, filepath.Join(confs.ConfDir, "admin.jwt")); err != nil {
 		panic(err)
 	}
-	if err := pushAccount(nil, filepath.Join(confs.ConfDir, "A.jwt")); err != nil {
-		panic(err)
-	}
+	//if err := pushAccount(nil, filepath.Join(confs.ConfDir, "A.jwt")); err != nil {
+	//	panic(err)
+	//}
 }
 
 func StartNATSServer() (*natsd.Server, error) {
@@ -118,5 +139,31 @@ func pushAccount(ur natsd.AccountResolver, file string) (err error) {
 	if err != nil {
 		return err
 	}
+	fmt.Println("Subject: ", c.Subject)
 	return ur.Store(c.Subject, string(data))
+}
+
+func FetchAccount(name string) (string, error) {
+	ur, err := url.Parse("http://localhost:9090/jwt/v1/accounts/")
+	if err != nil {
+		return "", err
+	}
+
+	ur.Path = filepath.Join(ur.Path, name)
+
+	resp, err := http.Get(ur.String())
+	if err != nil {
+		return "", fmt.Errorf("could not fetch <%q>: %v", ur.String(), err)
+	} else if resp == nil {
+		return "", fmt.Errorf("could not fetch <%q>: no response", ur.String())
+	} else if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("could not fetch <%q>: %v", ur.String(), resp.Status)
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
 }

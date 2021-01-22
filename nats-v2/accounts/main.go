@@ -32,11 +32,11 @@ func init() {
 
 func main() {
 	fmt.Println(confs.ConfDir)
-	oKp, _, oSeed, oJwt, err := CreateOperator("KO")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(string(oSeed))
+	//oKp, _, oSeed, oJwt, err := CreateOperator("KO")
+	//if err != nil {
+	//	panic(err)
+	//}
+	//fmt.Println(string(oSeed))
 	if err := ioutil.WriteFile(confs.OpJwtPath, []byte(oJwt), 0666); err != nil {
 		panic(err)
 	}
@@ -67,51 +67,51 @@ system_account: %s`, confs.OpJwtPath, sPub)), 0666)
 		panic(err)
 	}
 
-	aKp, aPub, aJwt, err := CreateAccount("A", oKp)
-	if err != nil {
-		panic(err)
-	}
-	claim, err := jwt.DecodeAccountClaims(aJwt)
-	if err != nil {
-		panic(err)
-	}
-	claim.Exports = jwt.Exports{
-		&jwt.Export{
-			Name:    "Events",
-			Subject: "Events",
-			Type:    jwt.Stream,
-		},
-		&jwt.Export{
-			Name:         "Notifications",
-			Subject:      "Notifications",
-			Type:         jwt.Service,
-			TokenReq:     false,
-			ResponseType: jwt.ResponseTypeStream,
-		},
-	}
-	aJwt, err = claim.Encode(oKp)
-	if err != nil {
-		panic(err)
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "A.jwt"), []byte(aJwt), 0666); err != nil {
-		panic(err)
-	}
-	_, _, _, aCreds, err := CreateUser("a", aKp)
-	if err != nil {
-		panic(err)
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "a.creds"), aCreds, 0666); err != nil {
-		panic(err)
-	}
+	//aKp, aPub, aJwt, err := CreateAccount("A", oKp)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//claim, err := jwt.DecodeAccountClaims(aJwt)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//claim.Exports = jwt.Exports{
+	//	&jwt.Export{
+	//		Name:    "Events",
+	//		Subject: "Events",
+	//		Type:    jwt.Stream,
+	//	},
+	//	&jwt.Export{
+	//		Name:         "Notifications",
+	//		Subject:      "Notifications",
+	//		Type:         jwt.Service,
+	//		TokenReq:     false,
+	//		ResponseType: jwt.ResponseTypeStream,
+	//	},
+	//}
+	//aJwt, err = claim.Encode(oKp)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "A.jwt"), []byte(aJwt), 0666); err != nil {
+	//	panic(err)
+	//}
+	//_, _, _, aCreds, err := CreateUser("a", aKp)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "a.creds"), aCreds, 0666); err != nil {
+	//	panic(err)
+	//}
 
 	AKp, _, AJwt, err := CreateAccount("Admin", oKp)
 	if err != nil {
 		panic(err)
 	}
-	claim, err = jwt.DecodeAccountClaims(AJwt)
-	if err != nil {
-		panic(err)
-	}
+	//claim, err = jwt.DecodeAccountClaims(AJwt)
+	//if err != nil {
+	//	panic(err)
+	//}
 
 	//if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "adminn.jwt"), []byte(AJwt), 0666); err != nil {
 	//	panic(err)
@@ -124,26 +124,26 @@ system_account: %s`, confs.OpJwtPath, sPub)), 0666)
 		panic(err)
 	}
 
-	claim.Imports = jwt.Imports{
-		&jwt.Import{
-			Name:    "Events",
-			Subject: "Events",
-			Account: aPub,
-			To:      "a",
-			Type:    jwt.Stream,
-		},
-		&jwt.Import{
-			Name:    "Notifications",
-			Subject: "a.Notifications",
-			Account: aPub,
-			To:      "Notifications",
-			Type:    jwt.Service,
-		},
-	}
-	AJwt, err = claim.Encode(oKp)
-	if err != nil {
-		panic(err)
-	}
+	//claim.Imports = jwt.Imports{
+	//	&jwt.Import{
+	//		Name:    "Events",
+	//		Subject: "Events",
+	//		Account: aPub,
+	//		To:      "a",
+	//		Type:    jwt.Stream,
+	//	},
+	//	&jwt.Import{
+	//		Name:    "Notifications",
+	//		Subject: "a.Notifications",
+	//		Account: aPub,
+	//		To:      "Notifications",
+	//		Type:    jwt.Service,
+	//	},
+	//}
+	//AJwt, err = claim.Encode(oKp)
+	//if err != nil {
+	//	panic(err)
+	//}
 	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.jwt"), []byte(AJwt), 0666); err != nil {
 		panic(err)
 	}

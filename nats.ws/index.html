@@ -46,11 +46,12 @@
       const init = async function () {
         // create a connection
         const nc = await connect({
-          servers: "localhost:9222",
+          servers: "wss://nats.appscode.ninja:443",
           authenticator: jwtAuthenticator(
-            "eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJqdGkiOiJLREUzUEdIRFFUSVlWMkdHUVVZNjVMTDVURVpBS0NHUFJQQVVGWjNTNlo1SFU0UkJRVE1BIiwiaWF0IjoxNjAxMjkyMTYzLCJpc3MiOiJBQUhJN0ZQRkc3WVNXTVM3TlYzSFNLQk5WVDNISUlVRFJNV0lNT0RRTVJYNjNXTkk3R1dUU0pSRyIsIm5hbWUiOiJhIiwic3ViIjoiVUJKMlo1TUFDREhMRzdIM01ZU0NVSlJaUVZYMjVQVFI1UEpUNVFLN0pBWFBWWjRDQzJNSVo0MlciLCJ0eXBlIjoidXNlciIsIm5hdHMiOnsicHViIjp7fSwic3ViIjp7fX19.L45r1adjdcTf3YwSi608k65M358j8orzxSU26UA8-xo6_L4aQKYXUGtq4DK0d3R_1ziwiLkAExEhvOI138iLAQ",
-            bytes("SUAOABL3SLRN3SAPXDBMLTV3KHBVBGN5SUVI54RIV57E662S456ICBZRBM")
+            "eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJqdGkiOiI0N09OVUlRSUIzVDIzTzJGWUlURUhFVVZZV1VDWDY1S0hZWDJYRFQ2VUw0U0xEM1BIS1lRIiwiaWF0IjoxNjA1ODUwNzIwLCJpc3MiOiJBQVhQWkxVSkZZWFFDWk81UEdXUUNQTVo2SFhOWEdYQU5PVktZQ05NWFVMV1NFQVhJRjVJQ1c0VyIsIm5hbWUiOiI5MSIsInN1YiI6IlVBRFNOSUdJSVlFV09OTE9NS1c3MlhTQzVTQ0o1UUlWREJXUVFHWVNMREhQSElSM0NOQ0dZRVlKIiwidHlwZSI6InVzZXIiLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e319fQ.GhZw7DURQh6dxYTvKFB7a44Go4qH_nCoRJvl1wOIFMoB104QzqD0FfzZ0EOLqbuzrYfrNq5sa9JFo__0nhroAA",
+            bytes("SUAHAD3TP2G4RV7PCH43RT6L3WIQFUWRWBLK7SJPUPYBLRYGJIWC5XPCEM")
           ),
+          ws: false,
           // authenticator: credsAuthenticator(
           // bytes(`-----BEGIN NATS USER JWT-----
           // eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJqdGkiOiJLREUzUEdIRFFUSVlWMkdHUVVZNjVMTDVURVpBS0NHUFJQQVVGWjNTNlo1SFU0UkJRVE1BIiwiaWF0IjoxNjAxMjkyMTYzLCJpc3MiOiJBQUhJN0ZQRkc3WVNXTVM3TlYzSFNLQk5WVDNISUlVRFJNV0lNT0RRTVJYNjNXTkk3R1dUU0pSRyIsIm5hbWUiOiJhIiwic3ViIjoiVUJKMlo1TUFDREhMRzdIM01ZU0NVSlJaUVZYMjVQVFI1UEpUNVFLN0pBWFBWWjRDQzJNSVo0MlciLCJ0eXBlIjoidXNlciIsIm5hdHMiOnsicHViIjp7fSwic3ViIjp7fX19.L45r1adjdcTf3YwSi608k65M358j8orzxSU26UA8-xo6_L4aQKYXUGtq4DK0d3R_1ziwiLkAExEhvOI138iLAQ
@@ -67,25 +68,24 @@
           // *************************************************************
           // `)),
           // token: "_csrf /home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats-v2/confs/a.creds",
-          ws: true,
         });
         addEntry("connected to NATS!");
 
         (async () => {
           addEntry("listening to channel `Notifications`");
-          const chat = nc.subscribe("Notifications");
+          const chat = nc.subscribe("91.Notifications");
           for await (const m of chat) {
             addEntry(`message : ${sc.decode(m.data)}`);
           }
           addEntry("listened to channel `Notifications`");
         })().then();
 
-        // (async () => {
-        //   await setInterval(() => {
-        //     nc.publish("Notifications", sc.encode("Hello there"));
-        //     addEntry("Published a message to `Notifications`");
-        //   }, 3000);
-        // })().then();
+        (async () => {
+          await setInterval(() => {
+            nc.publish("Events", sc.encode("Hello there"));
+            addEntry("Published a message to `Events`");
+          }, 3000);
+        })().then();
       };
       init();
     </script>
