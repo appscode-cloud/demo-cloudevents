@@ -1,4 +1,4 @@
-# github.com/cloudevents/sdk-go/protocol/nats/v2 v2.2.0 => ../../../github.com/tamalsaha/sdk-go/protocol/nats/v2
+# github.com/cloudevents/sdk-go/protocol/nats/v2 v2.2.0 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20210126105453-ecf7acedc0fe
 ## explicit
 github.com/cloudevents/sdk-go/protocol/nats/v2
 # github.com/cloudevents/sdk-go/v2 v2.2.0
@@ -120,4 +120,4 @@ golang.org/x/sys/windows/svc/mgr
 # golang.org/x/time v0.0.0-20200630173020-3af7569d3a1e
 ## explicit
 golang.org/x/time/rate
-# github.com/cloudevents/sdk-go/protocol/nats/v2 => ../../../github.com/tamalsaha/sdk-go/protocol/nats/v2
+# github.com/cloudevents/sdk-go/protocol/nats/v2 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20210126105453-ecf7acedc0fe

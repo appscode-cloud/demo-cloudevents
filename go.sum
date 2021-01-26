@@ -104,6 +104,8 @@ github.com/prometheus/client_model v0.0.0-20190812154241-14fe0d1b01d4/go.mod h1:
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.5.1 h1:nOGnQDM7FYENwehXlg/kFVnos3rEvtKTjRvOWSzb6H4=
 github.com/stretchr/testify v1.5.1/go.mod h1:5W2xD1RspED5o8YsWQXVCued0rvSQ+mT+I5cxcmMvtA=
+github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20210126105453-ecf7acedc0fe h1:oF88aEvfyBoviISH6O5CsqJ76rbiyhpoaZNH7YnMJxI=
+github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20210126105453-ecf7acedc0fe/go.mod h1:1kPy4RqlJd5/A/qyfdgttLUCCaAvxhYOC5SX23ApLg8=
 github.com/the-redback/go-oneliners v0.0.0-20190417084731-74f7694e6dae h1:BwOJABATZiBThg+LlH/l5SFaJTD5FnmPGuDGUGYQEH0=
 github.com/the-redback/go-oneliners v0.0.0-20190417084731-74f7694e6dae/go.mod h1:8mAftbjxEoQE8QEeAfSlRixx3wl8aiWKaJLt8ZTIiYE=
 github.com/valyala/bytebufferpool v1.0.0 h1:GqA5TC/0021Y/b9FG4Oi9Mr3q7XYx6KllzawFIhcdPw=
