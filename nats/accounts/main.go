@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -32,6 +33,10 @@ func init() {
 
 func main() {
 	println("Configuration directory: ", confs.ConfDir, "\n")
+	if err := os.MkdirAll(confs.ConfDir, os.ModePerm); err != nil {
+		panic(err)
+	}
+
 	oKp, _, oSeed, oJwt, err := CreateOperator("KO")
 	if err != nil {
 		panic(err)
