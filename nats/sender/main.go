@@ -20,8 +20,8 @@ type Example struct {
 }
 
 func main() {
-	sender, err := nats.NewSender("nats://localhost:5222", "user.admin.Events",
-		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds"))))
+	sender, err := nats.NewSender("nats://localhost:5222", "Events",
+		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "x.creds"))))
 	if err != nil {
 		panic(err)
 	}
@@ -33,7 +33,7 @@ func main() {
 
 	event := cloudevents.NewEvent()
 	event.SetID("123-123-123")
-	event.SetSubject("user.a.Events")
+	event.SetSubject("Events")
 	event.SetType("com.demo-cloudevents.sent")
 	event.SetTime(time.Now())
 	event.SetSource("demo-cloudevents/nats/sender")
@@ -44,7 +44,6 @@ func main() {
 		})
 
 		oneliners.PrettyJson(event)
-		return
 
 		if result := client.Send(context.Background(), event); cloudevents.IsUndelivered(result) {
 			log.Printf("failed to send: %v", err)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
@@ -50,10 +49,10 @@ func processEvents(ctx context.Context, event cloudevents.Event) error {
 	}
 	oneliners.PrettyJson(event.Subject())
 	oneliners.PrettyJson(data)
+	return nil
 
-	user := strings.Split(event.Subject(), ".")[1]
-
-	return SendNotificationToNatsServer(user+".Notifications", data)
+	//user := strings.Split(event.Subject(), ".")[1]
+	//return SendNotificationToNatsServer(user+".Notifications", data)
 }
 
 func SendNotificationToNatsServer(subject string, data interface{}) error {
