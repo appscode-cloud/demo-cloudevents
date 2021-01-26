@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -109,13 +110,10 @@ func AddConsumer(name, filter, stream string, mgr *jsm.Manager) (*jsm.Consumer, 
 func ReadMessage(stream, consumer string, mgr *jsm.Manager) error {
 	for {
 		msg, err := mgr.NextMsg(stream, consumer)
-		if err == nats.ErrTimeout {
+		if err == context.DeadlineExceeded {
 			continue
-		}
-		if err != nil {
-			//log.Printf(err.Error())
-			continue
-			//return err
+		} else if err != nil {
+			// log error and notify via email
 		}
 
 		fmt.Println(msg.Subject, "<==>", string(msg.Data))
