@@ -1,4 +1,4 @@
-# github.com/cloudevents/sdk-go/protocol/nats/v2 v2.2.0 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200831050400-1774999bfbb7
+# github.com/cloudevents/sdk-go/protocol/nats/v2 v2.2.0 => ../../../github.com/tamalsaha/sdk-go/protocol/nats/v2
 ## explicit
 github.com/cloudevents/sdk-go/protocol/nats/v2
 # github.com/cloudevents/sdk-go/v2 v2.2.0
@@ -40,7 +40,7 @@ github.com/mattn/go-colorable
 github.com/mattn/go-isatty
 # github.com/minio/highwayhash v1.0.0
 github.com/minio/highwayhash
-# github.com/nats-io/jsm.go v0.0.18
+# github.com/nats-io/jsm.go v0.0.20
 ## explicit
 github.com/nats-io/jsm.go
 github.com/nats-io/jsm.go/api
@@ -51,11 +51,10 @@ github.com/nats-io/jsm.go/api/server/advisory
 github.com/nats-io/jsm.go/api/server/metric
 # github.com/nats-io/jwt v1.0.1
 ## explicit
-github.com/nats-io/jwt
-# github.com/nats-io/jwt/v2 v2.0.0-20200827232814-292806fa48ba
+# github.com/nats-io/jwt/v2 v2.0.0-20201015190852-e11ce317263c
 ## explicit
 github.com/nats-io/jwt/v2
-# github.com/nats-io/nats-server/v2 v2.1.8-0.20200911161627-53ff94c75004
+# github.com/nats-io/nats-server/v2 v2.1.8-0.20201204171240-e1b590db604e
 ## explicit
 github.com/nats-io/nats-server/v2/conf
 github.com/nats-io/nats-server/v2/internal/ldap
@@ -63,7 +62,7 @@ github.com/nats-io/nats-server/v2/logger
 github.com/nats-io/nats-server/v2/server
 github.com/nats-io/nats-server/v2/server/pse
 github.com/nats-io/nats-server/v2/server/sysmem
-# github.com/nats-io/nats.go v1.10.1-0.20200606002146-fc6fed82929a
+# github.com/nats-io/nats.go v1.10.1-0.20201111151633-9e1f4a0d80d8
 ## explicit
 github.com/nats-io/nats.go
 github.com/nats-io/nats.go/encoders/builtin
@@ -76,12 +75,6 @@ github.com/nats-io/nuid
 # github.com/the-redback/go-oneliners v0.0.0-20190417084731-74f7694e6dae
 ## explicit
 github.com/the-redback/go-oneliners
-# github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f
-github.com/xeipuuv/gojsonpointer
-# github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415
-github.com/xeipuuv/gojsonreference
-# github.com/xeipuuv/gojsonschema v1.2.0
-github.com/xeipuuv/gojsonschema
 # go.opencensus.io v0.22.0
 go.opencensus.io
 go.opencensus.io/internal
@@ -111,8 +104,7 @@ go.uber.org/zap/internal/bufferpool
 go.uber.org/zap/internal/color
 go.uber.org/zap/internal/exit
 go.uber.org/zap/zapcore
-# golang.org/x/crypto v0.0.0-20200820211705-5c72a883971a
-## explicit
+# golang.org/x/crypto v0.0.0-20201016220609-9e8e0b390897
 golang.org/x/crypto/bcrypt
 golang.org/x/crypto/blowfish
 golang.org/x/crypto/ed25519
@@ -128,4 +120,4 @@ golang.org/x/sys/windows/svc/mgr
 # golang.org/x/time v0.0.0-20200630173020-3af7569d3a1e
 ## explicit
 golang.org/x/time/rate
-# github.com/cloudevents/sdk-go/protocol/nats/v2 => github.com/tamalsaha/sdk-go/protocol/nats/v2 v2.2.1-0.20200831050400-1774999bfbb7
+# github.com/cloudevents/sdk-go/protocol/nats/v2 => ../../../github.com/tamalsaha/sdk-go/protocol/nats/v2

@@ -754,9 +754,7 @@ func imposeOrder(value interface{}) error {
 			return value[i].String() < value[j].String()
 		})
 	case []string:
-		sort.Slice(value, func(i, j int) bool {
-			return value[i] < value[j]
-		})
+		sort.Strings(value)
 	case []*jwt.OperatorClaims:
 		sort.Slice(value, func(i, j int) bool {
 			return value[i].Issuer < value[j].Issuer
@@ -766,9 +764,7 @@ func imposeOrder(value interface{}) error {
 			return value.Gateways[i].Name < value.Gateways[j].Name
 		})
 	case WebsocketOpts:
-		sort.Slice(value.AllowedOrigins, func(i, j int) bool {
-			return value.AllowedOrigins[i] < value.AllowedOrigins[j]
-		})
+		sort.Strings(value.AllowedOrigins)
 	case string, bool, int, int32, int64, time.Duration, float64, nil,
 		LeafNodeOpts, ClusterOpts, *tls.Config, *URLAccResolver, *MemAccResolver, *DirAccResolver, *CacheDirAccResolver, Authentication:
 		// explicitly skipped types
@@ -1273,7 +1269,16 @@ func (s *Server) reloadAuthorization() {
 
 	// We will double check all JetStream configs on a reload.
 	if checkJetStream {
-		s.configAllJetStreamAccounts()
+		var err error
+		s.getJetStream().clearResources()
+		if s.globalAccountOnly() {
+			err = s.GlobalAccount().EnableJetStream(nil)
+		} else {
+			err = s.configAllJetStreamAccounts()
+		}
+		if err != nil {
+			s.Errorf(err.Error())
+		}
 	}
 
 	if res := s.AccountResolver(); res != nil {

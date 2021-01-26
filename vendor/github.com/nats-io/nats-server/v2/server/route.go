@@ -491,6 +491,7 @@ func (c *client) processRouteInfo(info *Info) {
 
 	supportsHeaders := c.srv.supportsHeaders()
 	clusterName := c.srv.ClusterName()
+	srvName := c.srv.Name()
 
 	c.mu.Lock()
 	// Connection can be closed at any time (by auth timeout, etc).
@@ -576,6 +577,12 @@ func (c *client) processRouteInfo(info *Info) {
 			s.removeConnectURLsAndSendINFOToClients(connectURLs, wsConnectURLs)
 		}
 		return
+	}
+
+	// Check if remote has same server name than this server.
+	if !c.route.didSolicit && info.Name == srvName {
+		// For now simply report as a warning.
+		c.Warnf("Remote server has a duplicate name: %q", info.Name)
 	}
 
 	// Mark that the INFO protocol has been received, so we can detect updates.
@@ -1028,6 +1035,7 @@ func (c *client) processRemoteSub(argo []byte, hasOrigin bool) (err error) {
 		if acc, isNew = srv.LookupOrRegisterAccount(accountName); isNew && expire {
 			acc.mu.Lock()
 			acc.expired = true
+			acc.incomplete = true
 			acc.mu.Unlock()
 		}
 	}
@@ -1228,10 +1236,10 @@ func (c *client) sendRouteSubOrUnSubProtos(subs []*subscription, isSubProto, tra
 		if len(sub.origin) > 0 && c.route.lnoc {
 			if isSubProto {
 				buf = append(buf, lSubBytes...)
+				buf = append(buf, sub.origin...)
 			} else {
 				buf = append(buf, lUnsubBytes...)
 			}
-			buf = append(buf, sub.origin...)
 			buf = append(buf, ' ')
 		} else {
 			if isSubProto {

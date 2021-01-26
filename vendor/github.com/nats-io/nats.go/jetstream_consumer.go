@@ -11,72 +11,97 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package api
+package nats
 
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
+func (nc *Conn) createOrUpdateConsumer(opts *jsOpts, delivery string) (*ConsumerInfo, error) {
+	if opts.streamName == "" {
+		return nil, ErrStreamNameRequired
+	}
+	if opts.consumer == nil {
+		return nil, ErrConsumerConfigRequired
+	}
+
+	crj, err := json.Marshal(&jSApiConsumerCreateRequest{
+		Stream: opts.streamName,
+		Config: consumerConfig{DeliverSubject: delivery, ConsumerConfig: opts.consumer},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := opts.context(nc.Opts.JetStreamTimeout)
+	defer cancel()
+
+	var subj string
+	switch len(opts.consumer.Durable) {
+	case 0:
+		subj = fmt.Sprintf(jSApiConsumerCreateT, opts.streamName)
+	default:
+		subj = fmt.Sprintf(jSApiDurableCreateT, opts.streamName, opts.consumer.Durable)
+	}
+
+	resp, err := nc.RequestWithContext(ctx, subj, crj)
+	if err != nil {
+		return nil, err
+	}
+
+	cresp := &jSApiConsumerCreateResponse{}
+	err = json.Unmarshal(resp.Data, cresp)
+	if err != nil {
+		return nil, err
+	}
+
+	if cresp.Error != nil {
+		return nil, cresp.Error
+	}
+
+	return cresp.ConsumerInfo, nil
+}
+
 const (
-	JSApiConsumerCreateT                   = "$JS.API.CONSUMER.CREATE.%s"
-	JSApiDurableCreateT                    = "$JS.API.CONSUMER.DURABLE.CREATE.%s.%s"
-	JSApiConsumerNamesT                    = "$JS.API.CONSUMER.NAMES.%s"
-	JSApiConsumerListT                     = "$JS.API.CONSUMER.LIST.%s"
-	JSApiConsumerInfoT                     = "$JS.API.CONSUMER.INFO.%s.%s"
-	JSApiConsumerDeleteT                   = "$JS.API.CONSUMER.DELETE.%s.%s"
-	JSApiRequestNextT                      = "$JS.API.CONSUMER.MSG.NEXT.%s.%s"
-	JSMetricConsumerAckPre                 = JSMetricPrefix + ".CONSUMER.ACK"
-	JSAdvisoryConsumerMaxDeliveryExceedPre = JSAdvisoryPrefix + ".CONSUMER.MAX_DELIVERIES"
+	jSApiConsumerCreateT = "$JS.API.CONSUMER.CREATE.%s"
+	jSApiDurableCreateT  = "$JS.API.CONSUMER.DURABLE.CREATE.%s.%s"
 )
 
-// io.nats.jetstream.api.v1.consumer_delete_response
-type JSApiConsumerDeleteResponse struct {
-	JSApiResponse
-	Success bool `json:"success,omitempty"`
+type apiError struct {
+	Code        int    `json:"code"`
+	Description string `json:"description,omitempty"`
+}
+
+// Error implements error
+func (e apiError) Error() string {
+	switch {
+	case e.Description == "" && e.Code == 0:
+		return "unknown JetStream Error"
+	case e.Description == "" && e.Code > 0:
+		return fmt.Sprintf("unknown JetStream %d Error", e.Code)
+	default:
+		return e.Description
+	}
+}
+
+type jSApiResponse struct {
+	Type  string    `json:"type"`
+	Error *apiError `json:"error,omitempty"`
 }
 
 // io.nats.jetstream.api.v1.consumer_create_request
-type JSApiConsumerCreateRequest struct {
+type jSApiConsumerCreateRequest struct {
 	Stream string         `json:"stream_name"`
-	Config ConsumerConfig `json:"config"`
+	Config consumerConfig `json:"config"`
 }
 
 // io.nats.jetstream.api.v1.consumer_create_response
-type JSApiConsumerCreateResponse struct {
-	JSApiResponse
+type jSApiConsumerCreateResponse struct {
+	jSApiResponse
 	*ConsumerInfo
-}
-
-// io.nats.jetstream.api.v1.consumer_info_response
-type JSApiConsumerInfoResponse struct {
-	JSApiResponse
-	*ConsumerInfo
-}
-
-// io.nats.jetstream.api.v1.consumer_names_request
-type JSApiConsumerNamesRequest struct {
-	JSApiIterableRequest
-}
-
-// io.nats.jetstream.api.v1.consumer_names_response
-type JSApiConsumerNamesResponse struct {
-	JSApiResponse
-	JSApiIterableResponse
-	Consumers []string `json:"consumers"`
-}
-
-// io.nats.jetstream.api.v1.consumer_list_request
-type JSApiConsumerListRequest struct {
-	JSApiIterableRequest
-}
-
-// io.nats.jetstream.api.v1.consumer_list_response
-type JSApiConsumerListResponse struct {
-	JSApiResponse
-	JSApiIterableResponse
-	Consumers []*ConsumerInfo `json:"consumers"`
 }
 
 type AckPolicy int
@@ -86,19 +111,6 @@ const (
 	AckAll
 	AckExplicit
 )
-
-func (p AckPolicy) String() string {
-	switch p {
-	case AckNone:
-		return "None"
-	case AckAll:
-		return "All"
-	case AckExplicit:
-		return "Explicit"
-	default:
-		return "Unknown Acknowledgement Policy"
-	}
-}
 
 func (p *AckPolicy) UnmarshalJSON(data []byte) error {
 	switch string(data) {
@@ -134,17 +146,6 @@ const (
 	ReplayInstant ReplayPolicy = iota
 	ReplayOriginal
 )
-
-func (p ReplayPolicy) String() string {
-	switch p {
-	case ReplayInstant:
-		return "Instant"
-	case ReplayOriginal:
-		return "Original"
-	default:
-		return "Unknown Replay Policy"
-	}
-}
 
 func (p *ReplayPolicy) UnmarshalJSON(data []byte) error {
 	switch string(data) {
@@ -188,23 +189,6 @@ const (
 	DeliverByStartTime
 )
 
-func (p DeliverPolicy) String() string {
-	switch p {
-	case DeliverAll:
-		return "All"
-	case DeliverLast:
-		return "Last"
-	case DeliverNew:
-		return "New"
-	case DeliverByStartSequence:
-		return "By Start Sequence"
-	case DeliverByStartTime:
-		return "By Start Time"
-	default:
-		return "Unknown Deliver Policy"
-	}
-}
-
 func (p *DeliverPolicy) UnmarshalJSON(data []byte) error {
 	switch string(data) {
 	case jsonString("all"), jsonString("undefined"):
@@ -240,11 +224,8 @@ func (p DeliverPolicy) MarshalJSON() ([]byte, error) {
 }
 
 // ConsumerConfig is the configuration for a JetStream consumes
-//
-// NATS Schema Type io.nats.jetstream.api.v1.consumer_configuration
 type ConsumerConfig struct {
 	Durable         string        `json:"durable_name,omitempty"`
-	DeliverSubject  string        `json:"deliver_subject,omitempty"`
 	DeliverPolicy   DeliverPolicy `json:"deliver_policy"`
 	OptStartSeq     uint64        `json:"opt_start_seq,omitempty"`
 	OptStartTime    *time.Time    `json:"opt_start_time,omitempty"`
@@ -255,16 +236,18 @@ type ConsumerConfig struct {
 	ReplayPolicy    ReplayPolicy  `json:"replay_policy"`
 	SampleFrequency string        `json:"sample_freq,omitempty"`
 	RateLimit       uint64        `json:"rate_limit_bps,omitempty"`
-	MaxAckPending   int           `json:"max_ack_pending,omitempty"`
 }
 
-// SequencePair is the consumer and stream sequence that uniquely identify a message
+type consumerConfig struct {
+	DeliverSubject string `json:"deliver_subject,omitempty"`
+	*ConsumerConfig
+}
+
 type SequencePair struct {
-	Consumer uint64 `json:"consumer_seq"`
-	Stream   uint64 `json:"stream_seq"`
+	ConsumerSeq uint64 `json:"consumer_seq"`
+	StreamSeq   uint64 `json:"stream_seq"`
 }
 
-// ConsumerInfo reports the current state of a consumer
 type ConsumerInfo struct {
 	Stream         string         `json:"stream_name"`
 	Name           string         `json:"name"`
@@ -272,21 +255,14 @@ type ConsumerInfo struct {
 	Created        time.Time      `json:"created"`
 	Delivered      SequencePair   `json:"delivered"`
 	AckFloor       SequencePair   `json:"ack_floor"`
-	NumAckPending  int            `json:"num_ack_pending"`
+	NumPending     int            `json:"num_pending"`
 	NumRedelivered int            `json:"num_redelivered"`
-	NumWaiting     int            `json:"num_waiting"`
-	NumPending     uint64         `json:"num_pending"`
-}
-
-// JSApiConsumerGetNextRequest is for getting next messages for pull based consumers
-//
-// NATS Schema Type io.nats.jetstream.api.v1.consumer_getnext_request
-type JSApiConsumerGetNextRequest struct {
-	Expires time.Time `json:"expires,omitempty"`
-	Batch   int       `json:"batch,omitempty"`
-	NoWait  bool      `json:"no_wait,omitempty"`
 }
 
 func jsonString(s string) string {
 	return "\"" + s + "\""
+}
+
+func isValidJSName(n string) bool {
+	return !(n == "" || strings.ContainsAny(n, ">*. "))
 }

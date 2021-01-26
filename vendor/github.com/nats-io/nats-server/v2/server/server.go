@@ -224,6 +224,10 @@ type Server struct {
 
 	// exporting account name the importer experienced issues with
 	incompleteAccExporterMap sync.Map
+
+	// Holds cluster name under different lock for mapping
+	cnMu sync.RWMutex
+	cn   string
 }
 
 // Make sure all are 64bits for atomic use
@@ -393,7 +397,7 @@ func NewServer(opts *Options) (*Server, error) {
 			s.mu.Unlock()
 			var a *Account
 			// perform direct lookup to avoid warning trace
-			if _, err := ar.Fetch(s.opts.SystemAccount); err == nil {
+			if _, err := fetchAccount(ar, s.opts.SystemAccount); err == nil {
 				a, _ = s.fetchAccount(s.opts.SystemAccount)
 			}
 			s.mu.Lock()
@@ -408,39 +412,6 @@ func NewServer(opts *Options) (*Server, error) {
 	// For tracking accounts
 	if err := s.configureAccounts(); err != nil {
 		return nil, err
-	}
-
-	// In local config mode, check that leafnode configuration
-	// refers to account that exist.
-	if len(opts.TrustedOperators) == 0 {
-		checkAccountExists := func(accName string) error {
-			if accName == _EMPTY_ {
-				return nil
-			}
-			if _, ok := s.accounts.Load(accName); !ok {
-				return fmt.Errorf("cannot find account %q specified in leafnode authorization", accName)
-			}
-			return nil
-		}
-		if err := checkAccountExists(opts.LeafNode.Account); err != nil {
-			return nil, err
-		}
-		for _, lu := range opts.LeafNode.Users {
-			if lu.Account == nil {
-				continue
-			}
-			if err := checkAccountExists(lu.Account.Name); err != nil {
-				return nil, err
-			}
-		}
-		for _, r := range opts.LeafNode.Remotes {
-			if r.LocalAccount == _EMPTY_ {
-				continue
-			}
-			if _, ok := s.accounts.Load(r.LocalAccount); !ok {
-				return nil, fmt.Errorf("no local account %q for remote leafnode", r.LocalAccount)
-			}
-		}
 	}
 
 	// Used to setup Authorization.
@@ -460,6 +431,14 @@ func (s *Server) ClusterName() string {
 	return cn
 }
 
+// Grabs cluster name with cluster name specific lock.
+func (s *Server) cachedClusterName() string {
+	s.cnMu.RLock()
+	cn := s.cn
+	s.cnMu.RUnlock()
+	return cn
+}
+
 // setClusterName will update the cluster name for this server.
 func (s *Server) setClusterName(name string) {
 	s.mu.Lock()
@@ -470,6 +449,7 @@ func (s *Server) setClusterName(name string) {
 	}
 	s.info.Cluster = name
 	s.routeInfo.Cluster = name
+
 	// Regenerate the info byte array
 	s.generateRouteInfoJSON()
 	// Need to close solicited leaf nodes. The close has to be done outside of the server lock.
@@ -482,6 +462,12 @@ func (s *Server) setClusterName(name string) {
 		c.mu.Unlock()
 	}
 	s.mu.Unlock()
+
+	// Also place into mapping cn with cnMu lock.
+	s.cnMu.Lock()
+	s.cn = name
+	s.cnMu.Unlock()
+
 	for _, l := range leafs {
 		l.closeConnection(ClusterNameConflict)
 	}
@@ -489,7 +475,6 @@ func (s *Server) setClusterName(name string) {
 		resetCh <- struct{}{}
 	}
 	s.Noticef("Cluster name updated to %s", name)
-
 }
 
 // Return whether the cluster name is dynamic.
@@ -586,7 +571,19 @@ func (s *Server) configureAccounts() error {
 	// Check opts and walk through them. We need to copy them here
 	// so that we do not keep a real one sitting in the options.
 	for _, acc := range s.opts.Accounts {
-		a := acc.shallowCopy()
+		var a *Account
+		if acc.Name == globalAccountName {
+			a = s.gacc
+		} else {
+			a = acc.shallowCopy()
+		}
+		if acc.hasMappings() {
+			// For now just move and wipe from opts.Accounts version.
+			a.mappings = acc.mappings
+			acc.mappings = nil
+			// We use this for selecting between multiple weighted destinations.
+			a.prand = rand.New(rand.NewSource(time.Now().UnixNano()))
+		}
 		acc.sl = nil
 		acc.clients = nil
 		s.registerAccountNoLock(a)
@@ -640,7 +637,7 @@ func (s *Server) configureAccounts() error {
 			acc.ic.acc = acc
 			acc.addAllServiceImportSubs()
 		}
-
+		acc.updated = time.Now()
 		return true
 	})
 
@@ -1157,6 +1154,7 @@ func (s *Server) registerAccountNoLock(acc *Account) *Account {
 		acc.lqws = make(map[string]int32)
 	}
 	acc.srv = s
+	acc.updated = time.Now()
 	acc.mu.Unlock()
 	s.accounts.Store(acc.Name, acc)
 	s.tmpAccounts.Delete(acc.Name)
@@ -1190,7 +1188,7 @@ func (s *Server) lookupAccount(name string) (*Account, error) {
 	}
 	// If we have a resolver see if it can fetch the account.
 	if s.AccountResolver() == nil {
-		return nil, ErrMissingAccount
+		return nil, ErrNoAccountResolver
 	}
 	return s.fetchAccount(name)
 }
@@ -1205,7 +1203,7 @@ func (s *Server) LookupAccount(name string) (*Account, error) {
 // Lock MUST NOT be held upon entry.
 func (s *Server) updateAccount(acc *Account) error {
 	// TODO(dlc) - Make configurable
-	if time.Since(acc.updated) < time.Second {
+	if !acc.incomplete && time.Since(acc.updated) < time.Second {
 		s.Debugf("Requested account update for [%s] ignored, too soon", acc.Name)
 		return ErrAccountResolverUpdateTooSoon
 	}
@@ -1228,11 +1226,11 @@ func (s *Server) updateAccountWithClaimJWT(acc *Account, claimJWT string) error 
 	}
 	accClaims, _, err := s.verifyAccountClaims(claimJWT)
 	if err == nil && accClaims != nil {
-		acc.updated = time.Now()
 		acc.mu.Lock()
 		if acc.Issuer == "" {
 			acc.Issuer = accClaims.Issuer
-		} else if acc.Issuer != accClaims.Issuer {
+		}
+		if acc.Name != accClaims.Subject {
 			acc.mu.Unlock()
 			return ErrAccountValidation
 		}
@@ -1253,7 +1251,7 @@ func (s *Server) fetchRawAccountClaims(name string) (string, error) {
 	}
 	// Need to do actual Fetch
 	start := time.Now()
-	claimJWT, err := accResolver.Fetch(name)
+	claimJWT, err := fetchAccount(accResolver, name)
 	fetchTime := time.Since(start)
 	if fetchTime > time.Second {
 		s.Warnf("Account [%s] fetch took %v", name, fetchTime)
@@ -1274,7 +1272,12 @@ func (s *Server) fetchAccountClaims(name string) (*jwt.AccountClaims, string, er
 	if err != nil {
 		return nil, _EMPTY_, err
 	}
-	return s.verifyAccountClaims(claimJWT)
+	var claim *jwt.AccountClaims
+	claim, claimJWT, err = s.verifyAccountClaims(claimJWT)
+	if claim != nil && claim.Subject != name {
+		return nil, _EMPTY_, ErrAccountValidation
+	}
+	return claim, claimJWT, err
 }
 
 // verifyAccountClaims will decode and validate any account claims.
@@ -1283,12 +1286,12 @@ func (s *Server) verifyAccountClaims(claimJWT string) (*jwt.AccountClaims, strin
 	if err != nil {
 		return nil, _EMPTY_, err
 	}
+	if !s.isTrustedIssuer(accClaims.Issuer) {
+		return nil, _EMPTY_, ErrAccountValidation
+	}
 	vr := jwt.CreateValidationResults()
 	accClaims.Validate(vr)
 	if vr.IsBlocking(true) {
-		return nil, _EMPTY_, ErrAccountValidation
-	}
-	if !s.isTrustedIssuer(accClaims.Issuer) {
 		return nil, _EMPTY_, ErrAccountValidation
 	}
 	return accClaims, claimJWT, nil
@@ -1416,7 +1419,7 @@ func (s *Server) Start() {
 						case <-s.quitCh:
 							return
 						case <-t.C:
-							if _, err := ar.Fetch(s.opts.SystemAccount); err != nil {
+							if _, err := fetchAccount(ar, s.opts.SystemAccount); err != nil {
 								continue
 							}
 							if _, err := s.fetchAccount(s.opts.SystemAccount); err != nil {
@@ -1721,6 +1724,7 @@ func (s *Server) AcceptLoop(clr chan struct{}) {
 	}
 
 	s.Noticef("Server id is %s", s.info.ID)
+	s.Noticef("Server name is %s", s.info.Name)
 	s.Noticef("Server is ready")
 
 	// If server was started with RANDOM_PORT (-1), opts.Port would be equal
@@ -1908,6 +1912,7 @@ const (
 	LeafzPath    = "/leafz"
 	SubszPath    = "/subsz"
 	StackszPath  = "/stacksz"
+	AccountzPath = "/accountz"
 )
 
 func (s *Server) basePath(p string) string {
@@ -1985,6 +1990,8 @@ func (s *Server) startMonitoring(secure bool) error {
 	mux.HandleFunc(s.basePath("/subscriptionsz"), s.HandleSubsz)
 	// Stacksz
 	mux.HandleFunc(s.basePath(StackszPath), s.HandleStacksz)
+	// Accountz
+	mux.HandleFunc(s.basePath(AccountzPath), s.HandleAccountz)
 
 	// Do not set a WriteTimeout because it could cause cURL/browser
 	// to return empty response or unable to display page if the
@@ -1995,6 +2002,11 @@ func (s *Server) startMonitoring(secure bool) error {
 		MaxHeaderBytes: 1 << 20,
 	}
 	s.mu.Lock()
+	if s.shutdown {
+		httpListener.Close()
+		s.mu.Unlock()
+		return nil
+	}
 	s.http = httpListener
 	s.httpHandler = mux
 	s.monitoringServer = srv
@@ -3214,6 +3226,9 @@ func (s *Server) setFirstPingTimer(c *client) {
 		if c.kind != CLIENT {
 			if d > firstPingInterval {
 				d = firstPingInterval
+			}
+			if c.kind == GATEWAY {
+				d = adjustPingIntervalForGateway(d)
 			}
 		} else if d > firstClientPingInterval {
 			d = firstClientPingInterval

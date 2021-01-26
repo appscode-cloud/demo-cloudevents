@@ -55,7 +55,7 @@ func main() {
 	}
 
 	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`//listen: -1
-jetstream: {max_mem_store: 10Mb, max_file_store: 10Mb}
+jetstream: {max_mem_store: 10Gb, max_file_store: 10Gb}
 host: localhost
 port: 5222
 operator: %s
@@ -72,11 +72,74 @@ system_account: %s`, confs.OpJwtPath, confs.ConfDir, sPub)), 0666)
 	if err != nil {
 		panic(err)
 	}
+
 	_, _, _, aCreds, err := CreateUser("admin", aKp)
 	if err != nil {
 		panic(err)
 	}
 	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.creds"), aCreds, 0666); err != nil {
+		panic(err)
+	}
+
+	xKp, xPub, xJwt, err := CreateAccount("A", oKp)
+	if err != nil {
+		panic(err)
+	}
+	claim, err := jwt.DecodeAccountClaims(xJwt)
+	if err != nil {
+		panic(err)
+	}
+	claim.Exports = jwt.Exports{
+		&jwt.Export{
+			Name:    "Events",
+			Subject: "Events",
+			Type:    jwt.Stream,
+		},
+		&jwt.Export{
+			Name:         "Notifications",
+			Subject:      "Notifications",
+			Type:         jwt.Service,
+			TokenReq:     false,
+			ResponseType: jwt.ResponseTypeStream,
+		},
+	}
+	xJwt, err = claim.Encode(oKp)
+	if err != nil {
+		panic(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "X.jwt"), []byte(xJwt), 0666); err != nil {
+		panic(err)
+	}
+	_, _, _, xCreds, err := CreateUser("x", xKp)
+	if err != nil {
+		panic(err)
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "x.creds"), xCreds, 0666); err != nil {
+		panic(err)
+	}
+
+	claim, err = jwt.DecodeAccountClaims(aJwt)
+	if err != nil {
+		panic(err)
+	}
+	claim.Imports = jwt.Imports{
+		&jwt.Import{
+			Name:    "Events",
+			Subject: "Events",
+			Account: xPub,
+			To:      "user.x",
+			Type:    jwt.Stream,
+		},
+		&jwt.Import{
+			Name:    "Notifications",
+			Subject: "user.x.Notifications",
+			Account: xPub,
+			To:      "Notifications",
+			Type:    jwt.Service,
+		},
+	}
+	aJwt, err = claim.Encode(oKp)
+	if err != nil {
 		panic(err)
 	}
 
@@ -90,6 +153,9 @@ system_account: %s`, confs.OpJwtPath, confs.ConfDir, sPub)), 0666)
 		panic(err)
 	}
 	if err = s.AccountResolver().Store(aPub, aJwt); err != nil {
+		panic(err)
+	}
+	if err = s.AccountResolver().Store(xPub, xJwt); err != nil {
 		panic(err)
 	}
 	log.Println("Everything is okay, I guess")

@@ -132,6 +132,7 @@ const (
 func (c *client) parse(buf []byte) error {
 	var i int
 	var b byte
+	var lmsg bool
 
 	// Snapshots
 	c.mu.Lock()
@@ -389,6 +390,17 @@ func (c *client) parse(buf []byte) error {
 				if err := c.processPub(arg); err != nil {
 					return err
 				}
+				// Check if we have and account mappings or tees or filters.
+				// FIXME(dlc) - Probably better way to do this.
+				// Could add in cache but will be tricky since results based on pub subject are dynamic
+				// due to wildcard matching and weight sets.
+				if c.kind == CLIENT && c.in.flags.isSet(hasMappings) {
+					old := c.pa.subject
+					changed := c.selectMappedSubject()
+					if trace && changed {
+						c.traceInOp("MAPPING", []byte(fmt.Sprintf("%s -> %s", old, c.pa.subject)))
+					}
+				}
 				c.drop, c.as, c.state = 0, i+1, MSG_PAYLOAD
 				// If we don't have a saved buffer then jump ahead with
 				// the index. If this overruns what is left we fall out
@@ -452,6 +464,7 @@ func (c *client) parse(buf []byte) error {
 			// Drop all pub args
 			c.pa.arg, c.pa.pacache, c.pa.origin, c.pa.account, c.pa.subject = nil, nil, nil, nil, nil
 			c.pa.reply, c.pa.hdr, c.pa.size, c.pa.szb, c.pa.hdb, c.pa.queues = nil, -1, 0, nil, nil, nil
+			lmsg = false
 		case OP_A:
 			switch b {
 			case '+':
@@ -720,7 +733,12 @@ func (c *client) parse(buf []byte) error {
 					err = c.processUnsub(arg)
 				case ROUTER:
 					if trace && c.srv != nil {
-						c.traceInOp("RS-", arg)
+						switch c.op {
+						case 'R', 'r':
+							c.traceInOp("RS-", arg)
+						case 'L', 'l':
+							c.traceInOp("LS-", arg)
+						}
 					}
 					err = c.processRemoteUnsub(arg)
 				case GATEWAY:
@@ -921,6 +939,7 @@ func (c *client) parse(buf []byte) error {
 						if trace {
 							c.traceInOp("LMSG", arg)
 						}
+						lmsg = true
 						err = c.processRoutedOriginClusterMsgArgs(arg)
 					}
 				} else if c.kind == LEAF {
@@ -1103,7 +1122,7 @@ func (c *client) parse(buf []byte) error {
 
 		if c.argBuf == nil {
 			// Works also for MSG_ARG, when message comes from ROUTE.
-			if err := c.clonePubArg(); err != nil {
+			if err := c.clonePubArg(lmsg); err != nil {
 				goto parseErr
 			}
 		}
@@ -1154,13 +1173,16 @@ func protoSnippet(start int, buf []byte) string {
 
 // clonePubArg is used when the split buffer scenario has the pubArg in the existing read buffer, but
 // we need to hold onto it into the next read.
-func (c *client) clonePubArg() error {
+func (c *client) clonePubArg(lmsg bool) error {
 	// Just copy and re-process original arg buffer.
 	c.argBuf = c.scratch[:0]
 	c.argBuf = append(c.argBuf, c.pa.arg...)
 
 	switch c.kind {
 	case ROUTER, GATEWAY:
+		if lmsg {
+			return c.processRoutedOriginClusterMsgArgs(c.argBuf)
+		}
 		if c.pa.hdr < 0 {
 			return c.processRoutedMsgArgs(c.argBuf)
 		} else {

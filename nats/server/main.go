@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
 	"time"
@@ -25,18 +26,28 @@ func main() {
 		panic(err)
 	}
 
-	stream, err := AddStream("ReceivedEvents", "user.*.Events", nc)
+	mgr, err := jsm.New(nc, jsm.WithTimeout(time.Second*2))
+	if err != nil {
+		panic(err)
+	}
+
+	stream, err := AddStream("ReceivedEvents", "user.*.Events", mgr)
 	if err != nil {
 		panic(err)
 	}
 	log.Printf("A stream named `%s` has been created", stream.Name())
 
-	consumer, err := AddConsumer("ProcessEvents", "user.*.Events", stream.Name(), nc)
+	consumer, err := AddConsumer("ProcessEvents", "user.*.Events", stream.Name(), mgr)
 	if err != nil {
 		panic(err)
 	}
 	log.Printf("A consumer named `%s` has been created", consumer.Name())
 
+	go PublishMessage()
+
+	if err = ReadMessage(stream.Name(), consumer.Name(), mgr); err != nil {
+		panic(err)
+	}
 	//var done chan bool
 	//<-done
 }
@@ -71,9 +82,9 @@ func StartJSServer() (*natsd.Server, *nats.Conn, error) {
 	return s, nc, nil
 }
 
-func AddStream(name, subject string, nc *nats.Conn) (*jsm.Stream, error) {
-	stream, err := jsm.NewStreamFromDefault(name, jsm.DefaultWorkQueue, jsm.StreamConnection(
-		jsm.WithConnection(nc)), jsm.Subjects(subject), jsm.FileStorage(), jsm.MaxAge(24*365*time.Hour),
+func AddStream(name, subject string, mgr *jsm.Manager) (*jsm.Stream, error) {
+	stream, err := mgr.LoadOrNewStreamFromDefault(name, jsm.DefaultWorkQueue,
+		jsm.Subjects(subject), jsm.FileStorage(), jsm.MaxAge(24*365*time.Hour),
 		jsm.DiscardOld(), jsm.MaxMessages(-1), jsm.MaxBytes(-1), jsm.MaxMessageSize(512),
 		jsm.DuplicateWindow(1*time.Hour))
 	if err != nil {
@@ -83,9 +94,9 @@ func AddStream(name, subject string, nc *nats.Conn) (*jsm.Stream, error) {
 	return stream, nil
 }
 
-func AddConsumer(name, filter, stream string, nc *nats.Conn) (*jsm.Consumer, error) {
-	consumer, err := jsm.NewConsumerFromDefault(stream, jsm.DefaultConsumer, jsm.ConsumerConnection(
-		jsm.WithConnection(nc)), jsm.DurableName(name), jsm.MaxDeliveryAttempts(5),
+func AddConsumer(name, filter, stream string, mgr *jsm.Manager) (*jsm.Consumer, error) {
+	consumer, err := mgr.LoadOrNewConsumerFromDefault(stream, name, jsm.DefaultConsumer,
+		jsm.DurableName(name), jsm.MaxDeliveryAttempts(5),
 		jsm.AckWait(30*time.Second), jsm.AcknowledgeExplicit(), jsm.ReplayInstantly(),
 		jsm.DeliverAllAvailable(), jsm.FilterStreamBySubject(filter))
 	if err != nil {
@@ -93,4 +104,36 @@ func AddConsumer(name, filter, stream string, nc *nats.Conn) (*jsm.Consumer, err
 	}
 
 	return consumer, nil
+}
+
+func ReadMessage(stream, consumer string, mgr *jsm.Manager) error {
+	for {
+		msg, err := mgr.NextMsg(stream, consumer)
+		if err == nats.ErrTimeout {
+			continue
+		}
+		if err != nil {
+			//log.Printf(err.Error())
+			continue
+			//return err
+		}
+
+		fmt.Println(msg.Subject, "<==>", string(msg.Data))
+		msg.Ack()
+	}
+}
+
+func PublishMessage() {
+	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir, "x.creds")))
+	if err != nil {
+		panic(err)
+	}
+	ticker := time.NewTicker(time.Second * 2)
+	for {
+		select {
+		case t := <-ticker.C:
+			if err := nc.Publish("Events", []byte(fmt.Sprintf("Hello there, at %v", t.String()))); err != nil {
+			}
+		}
+	}
 }
