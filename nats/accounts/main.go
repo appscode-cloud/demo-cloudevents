@@ -68,7 +68,13 @@ resolver: {
 	type: full
 	dir: %s
 }
-system_account: %s`, confs.OpJwtPath, confs.ConfDir, sPub)), 0666)
+system_account: %s
+websocket: {
+  host: 0.0.0.0
+  port: 9222
+  no_tls: true
+//  allowed_origins: ["https://appscode.ninja", "https://byte.builders","http://localhost:8080"]
+}`, confs.OpJwtPath, confs.ConfDir, sPub)), 0666)
 	if err != nil {
 		panic(err)
 	}

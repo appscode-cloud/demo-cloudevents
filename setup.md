@@ -61,6 +61,13 @@ $ go run receiver/main.go
 
 $ go run sender/main.go
 
+
+## Publish/Subscribe via `Service` type Export/Import
+
+$ nats -s nats://localhost:5222 sub 'Notifications' --creds confs/ac_store/x.creds
+
+$ nats -s nats://localhost:5222 pub 'user.x.Notifications' "Hello there 6" --creds confs/ac_store/admin.creds
+
 ## TODO:
 
 - License server creates a BB account (issues nats account, uses BB user_id as user.{user_id} stream prefix)

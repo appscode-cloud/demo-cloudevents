@@ -46,46 +46,31 @@
       const init = async function () {
         // create a connection
         const nc = await connect({
-          servers: "wss://nats.appscode.ninja:443",
+          // servers: "wss://nats.appscode.ninja:443",
+          servers: "ws://localhost:9222",
           authenticator: jwtAuthenticator(
-            "eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJqdGkiOiI0N09OVUlRSUIzVDIzTzJGWUlURUhFVVZZV1VDWDY1S0hZWDJYRFQ2VUw0U0xEM1BIS1lRIiwiaWF0IjoxNjA1ODUwNzIwLCJpc3MiOiJBQVhQWkxVSkZZWFFDWk81UEdXUUNQTVo2SFhOWEdYQU5PVktZQ05NWFVMV1NFQVhJRjVJQ1c0VyIsIm5hbWUiOiI5MSIsInN1YiI6IlVBRFNOSUdJSVlFV09OTE9NS1c3MlhTQzVTQ0o1UUlWREJXUVFHWVNMREhQSElSM0NOQ0dZRVlKIiwidHlwZSI6InVzZXIiLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e319fQ.GhZw7DURQh6dxYTvKFB7a44Go4qH_nCoRJvl1wOIFMoB104QzqD0FfzZ0EOLqbuzrYfrNq5sa9JFo__0nhroAA",
-            bytes("SUAHAD3TP2G4RV7PCH43RT6L3WIQFUWRWBLK7SJPUPYBLRYGJIWC5XPCEM")
+            "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJSUEFUTFNDVkI0RlZPWE9CVlhMMjNKNE1TTjJEQ1Y0T1hYTTUzUVJaU1Y0Tlc2UFVKRUNBIiwiaWF0IjoxNjExNjY3NzgwLCJpc3MiOiJBQVdST083NVFXTU9NMloyWEpQNDY2NkNMQ0k1Q1VTSDIzSUpQWlVBQUdGVUlTSFJEVUJEVEdKRyIsIm5hbWUiOiJ4Iiwic3ViIjoiVUFGVE5OTDVSNVlOSFZKTEdMQ0VLT05JNUNRV01SWTdaRlZVWkNKWlBaUUhUMjNER0VGMkxCWkgiLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.z92SvSkdGXHaDC-bmU0bCIOc_tqHLZLFKJ_g_L_bTqFw7yLoQ7thgBaIgEQTNvSa62JAiX6YHoJCilz5-hASBg",
+            bytes("SUAPZF3HKKUXQGMIYATBSUMXLOFCQ2XXYZV4MDIOIZIN6ZUO5KKMNXQNCA")
           ),
-          ws: false,
-          // authenticator: credsAuthenticator(
-          // bytes(`-----BEGIN NATS USER JWT-----
-          // eyJ0eXAiOiJqd3QiLCJhbGciOiJlZDI1NTE5In0.eyJqdGkiOiJLREUzUEdIRFFUSVlWMkdHUVVZNjVMTDVURVpBS0NHUFJQQVVGWjNTNlo1SFU0UkJRVE1BIiwiaWF0IjoxNjAxMjkyMTYzLCJpc3MiOiJBQUhJN0ZQRkc3WVNXTVM3TlYzSFNLQk5WVDNISUlVRFJNV0lNT0RRTVJYNjNXTkk3R1dUU0pSRyIsIm5hbWUiOiJhIiwic3ViIjoiVUJKMlo1TUFDREhMRzdIM01ZU0NVSlJaUVZYMjVQVFI1UEpUNVFLN0pBWFBWWjRDQzJNSVo0MlciLCJ0eXBlIjoidXNlciIsIm5hdHMiOnsicHViIjp7fSwic3ViIjp7fX19.L45r1adjdcTf3YwSi608k65M358j8orzxSU26UA8-xo6_L4aQKYXUGtq4DK0d3R_1ziwiLkAExEhvOI138iLAQ
-          // ------END NATS USER JWT------
-
-          // ************************* IMPORTANT *************************
-          // NKEY Seed printed below can be used to sign and prove identity.
-          // NKEYs are sensitive and should be treated as secrets.
-
-          // -----BEGIN USER NKEY SEED-----
-          // SUAOABL3SLRN3SAPXDBMLTV3KHBVBGN5SUVI54RIV57E662S456ICBZRBM
-          // ------END USER NKEY SEED------
-
-          // *************************************************************
-          // `)),
-          // token: "_csrf /home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats-v2/confs/a.creds",
+          ws: true,
         });
         addEntry("connected to NATS!");
 
         (async () => {
           addEntry("listening to channel `Notifications`");
-          const chat = nc.subscribe("91.Notifications");
+          const chat = nc.subscribe("Notifications");
           for await (const m of chat) {
             addEntry(`message : ${sc.decode(m.data)}`);
           }
           addEntry("listened to channel `Notifications`");
         })().then();
 
-        (async () => {
-          await setInterval(() => {
-            nc.publish("Events", sc.encode("Hello there"));
-            addEntry("Published a message to `Events`");
-          }, 3000);
-        })().then();
+        // (async () => {
+        //   await setInterval(() => {
+        //     nc.publish("Notifications", sc.encode("Self:   Hello there"));
+        //     addEntry("Published a message to `Events`");
+        //   }, 3000);
+        // })().then();
       };
       init();
     </script>
