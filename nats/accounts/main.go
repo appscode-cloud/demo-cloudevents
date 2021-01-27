@@ -92,7 +92,7 @@ websocket: {
 		panic(err)
 	}
 
-	xKp, xPub, xJwt, err := CreateAccount("A", oKp)
+	xKp, xPub, xJwt, err := CreateAccount("X", oKp)
 	if err != nil {
 		panic(err)
 	}
