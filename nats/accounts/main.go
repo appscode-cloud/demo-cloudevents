@@ -138,15 +138,17 @@ websocket: {
 			Name:    "Events",
 			Subject: "Events",
 			Account: xPub,
-			To:      "user.x",
-			Type:    jwt.Stream,
+			//To:           "user.x",
+			LocalSubject: "user.x.Events",
+			Type:         jwt.Stream,
 		},
 		&jwt.Import{
 			Name:    "Notifications",
-			Subject: "user.x.Notifications",
+			Subject: "Notifications",
 			Account: xPub,
-			To:      "Notifications",
-			Type:    jwt.Service,
+			//To:      "Notifications",
+			LocalSubject: "user.x.Notifications",
+			Type:         jwt.Service,
 		},
 	}
 	aJwt, err = claim.Encode(oKp)
@@ -154,19 +156,25 @@ websocket: {
 		panic(err)
 	}
 
-	s, err := StartJSServer()
+	//s, err := StartJSServer()
+	//if err != nil {
+	//	panic(err)
+	//}
+	//defer s.Shutdown()
+
+	var acr natsd.AccountResolver
+	acr, err = natsd.NewDirAccResolver(confs.ConfDir, 0, time.Duration(0), false)
 	if err != nil {
 		panic(err)
 	}
-	defer s.Shutdown()
 
-	if err = s.AccountResolver().Store(sPub, sJwt); err != nil {
+	if err = acr.Store(sPub, sJwt); err != nil {
 		panic(err)
 	}
-	if err = s.AccountResolver().Store(aPub, aJwt); err != nil {
+	if err = acr.Store(aPub, aJwt); err != nil {
 		panic(err)
 	}
-	if err = s.AccountResolver().Store(xPub, xJwt); err != nil {
+	if err = acr.Store(xPub, xJwt); err != nil {
 		panic(err)
 	}
 	log.Println("Everything is okay, I guess")

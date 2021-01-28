@@ -127,6 +127,10 @@ type ConnInfo struct {
 	Account        string      `json:"account,omitempty"`
 	Subs           []string    `json:"subscriptions_list,omitempty"`
 	SubsDetail     []SubDetail `json:"subscriptions_list_detail,omitempty"`
+	JWT            string      `json:"jwt,omitempty"`
+	IssuerKey      string      `json:"issuer_key,omitempty"`
+	NameTag        string      `json:"name_tag,omitempty"`
+	Tags           jwt.TagList `json:"tags,omitempty"`
 }
 
 // DefaultConnListSize is the default size of the connection list.
@@ -329,11 +333,15 @@ func (s *Server) Connz(opts *ConnzOptions) (*Connz, error) {
 		}
 		// Fill in user if auth requested.
 		if auth {
-			ci.AuthorizedUser = client.opts.Username
+			ci.AuthorizedUser = client.getRawAuthUser()
 			// Add in account iff not the global account.
 			if client.acc != nil && (client.acc.Name != globalAccountName) {
 				ci.Account = client.acc.Name
 			}
+			ci.JWT = client.opts.JWT
+			ci.IssuerKey = issuerForClient(client)
+			ci.Tags = client.tags
+			ci.NameTag = client.nameTag
 		}
 		client.mu.Unlock()
 		pconns[i] = ci
@@ -447,7 +455,7 @@ func (ci *ConnInfo) fill(client *client, nc net.Conn, now time.Time) {
 	ci.LastActivity = client.last
 	ci.Uptime = myUptime(now.Sub(client.start))
 	ci.Idle = myUptime(now.Sub(client.last))
-	ci.RTT = client.getRTT()
+	ci.RTT = client.getRTT().String()
 	ci.OutMsgs = client.outMsgs
 	ci.OutBytes = client.outBytes
 	ci.NumSubs = uint32(len(client.subs))
@@ -477,14 +485,14 @@ func (ci *ConnInfo) fill(client *client, nc net.Conn, now time.Time) {
 }
 
 // Assume lock is held
-func (c *client) getRTT() string {
+func (c *client) getRTT() time.Duration {
 	if c.rtt == 0 {
 		// If a real client, go ahead and send ping now to get a value
 		// for RTT. For tests and telnet, or if client is closing, etc skip.
 		if c.opts.Lang != "" {
 			c.sendRTTPingLocked()
 		}
-		return ""
+		return 0
 	}
 	var rtt time.Duration
 	if c.rtt > time.Microsecond && c.rtt < time.Millisecond {
@@ -492,7 +500,7 @@ func (c *client) getRTT() string {
 	} else {
 		rtt = c.rtt.Truncate(time.Nanosecond)
 	}
-	return rtt.String()
+	return rtt
 }
 
 func decodeBool(w http.ResponseWriter, r *http.Request, param string) (bool, error) {
@@ -703,7 +711,7 @@ func (s *Server) Routez(routezOpts *RoutezOptions) (*Routez, error) {
 			NumSubs:      uint32(len(r.subs)),
 			Import:       r.opts.Import,
 			Export:       r.opts.Export,
-			RTT:          r.getRTT(),
+			RTT:          r.getRTT().String(),
 		}
 
 		if len(r.subs) > 0 {
@@ -1036,6 +1044,7 @@ type Varz struct {
 	Subscriptions     uint32            `json:"subscriptions"`
 	HTTPReqStats      map[string]uint64 `json:"http_req_stats"`
 	ConfigLoadTime    time.Time         `json:"config_load_time"`
+	Tags              jwt.TagList       `json:"tags,omitempty"`
 }
 
 // JetStreamVarz contains basic runtime information about jetstream
@@ -1228,6 +1237,7 @@ func (s *Server) createVarz(pcpu float64, rss int64) *Varz {
 		MaxSubs:  opts.MaxSubs,
 		Cores:    numCores,
 		MaxProcs: maxProcs,
+		Tags:     opts.Tags,
 	}
 	if len(opts.Routes) > 0 {
 		varz.Cluster.URLs = urlsToStrings(opts.Routes)
@@ -1787,7 +1797,7 @@ func (s *Server) Leafz(opts *LeafzOptions) (*Leafz, error) {
 				Account:  ln.acc.Name,
 				IP:       ln.host,
 				Port:     int(ln.port),
-				RTT:      ln.getRTT(),
+				RTT:      ln.getRTT().String(),
 				InMsgs:   atomic.LoadInt64(&ln.inMsgs),
 				OutMsgs:  ln.outMsgs,
 				InBytes:  atomic.LoadInt64(&ln.inBytes),
@@ -1915,6 +1925,8 @@ func (reason ClosedState) String() string {
 		return "Cluster Name Conflict"
 	case DuplicateRemoteLeafnodeConnection:
 		return "Duplicate Remote LeafNode Connection"
+	case DuplicateClientID:
+		return "Duplicate Client ID"
 	}
 
 	return "Unknown State"
@@ -1931,7 +1943,7 @@ func newExtServiceLatency(l *serviceLatency) *jwt.ServiceLatency {
 		return nil
 	}
 	return &jwt.ServiceLatency{
-		Sampling: int(l.sampling),
+		Sampling: jwt.SamplingRate(l.sampling),
 		Results:  jwt.Subject(l.subject),
 	}
 }
@@ -1972,6 +1984,9 @@ type AccountInfo struct {
 	Exports     []ExtExport          `json:"exports,omitempty"`
 	Imports     []ExtImport          `json:"imports,omitempty"`
 	Jwt         string               `json:"jwt,omitempty"`
+	IssuerKey   string               `json:"issuer_key,omitempty"`
+	NameTag     string               `json:"name_tag,omitempty"`
+	Tags        jwt.TagList          `json:"tags,omitempty"`
 	Claim       *jwt.AccountClaims   `json:"decoded_jwt,omitempty"`
 	Vr          []ExtVrIssues        `json:"validation_result_jwt,omitempty"`
 	RevokedUser map[string]time.Time `json:"revoked_user,omitempty"`
@@ -2170,6 +2185,9 @@ func (s *Server) accountInfo(accName string) (*AccountInfo, error) {
 		exports,
 		imports,
 		a.claimJWT,
+		a.Issuer,
+		a.nameTag,
+		a.tags,
 		claim,
 		vrIssues,
 		collectRevocations(a.usersRevoked),

@@ -59,6 +59,8 @@ type leaf struct {
 	isSpoke bool
 	// remoteCluster is when we are a hub but the spoke leafnode is part of a cluster.
 	remoteCluster string
+	// remoteServer holds onto the remove server's name or ID.
+	remoteServer string
 	// Used to suppress sub and unsub interest. Same as routes but our audience
 	// here is tied to this leaf node. This will hold all subscriptions except this
 	// leaf nodes. This represents all the interest we want to send to the other side.
@@ -105,7 +107,10 @@ func (c *client) isHubLeafNode() bool {
 // This will spin up go routines to solicit the remote leaf node connections.
 func (s *Server) solicitLeafNodeRemotes(remotes []*RemoteLeafOpts) {
 	for _, r := range remotes {
+		s.mu.Lock()
 		remote := newLeafNodeCfg(r)
+		s.leafRemoteCfgs = append(s.leafRemoteCfgs, remote)
+		s.mu.Unlock()
 		s.startGoRoutine(func() { s.connectToRemoteLeafNode(remote, true) })
 	}
 }
@@ -207,6 +212,32 @@ func validateLeafNodeAuthOptions(o *Options) error {
 		users[u.Username] = struct{}{}
 	}
 	return nil
+}
+
+// Update remote LeafNode TLS configurations after a config reload.
+func (s *Server) updateRemoteLeafNodesTLSConfig(opts *Options) {
+	max := len(opts.LeafNode.Remotes)
+	if max == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Changes in the list of remote leaf nodes is not supported.
+	// However, make sure that we don't go over the arrays.
+	if len(s.leafRemoteCfgs) < max {
+		max = len(s.leafRemoteCfgs)
+	}
+	for i := 0; i < max; i++ {
+		ro := opts.LeafNode.Remotes[i]
+		cfg := s.leafRemoteCfgs[i]
+		if ro.TLSConfig != nil {
+			cfg.Lock()
+			cfg.TLSConfig = ro.TLSConfig.Clone()
+			cfg.Unlock()
+		}
+	}
 }
 
 func (s *Server) reConnectToRemoteLeafNode(remote *leafNodeCfg) {
@@ -376,9 +407,14 @@ func (s *Server) connectToRemoteLeafNode(remote *leafNodeCfg, firstConnect bool)
 
 // Save off the tlsName for when we use TLS and mix hostnames and IPs. IPs usually
 // come from the server we connect to.
+//
+// We used to save the name only if there was a TLSConfig or scheme equal to "tls".
+// However, this was causing failures for users that did not set the scheme (and
+// their remote connections did not have a tls{} block).
+// We now save the host name regardless in case the remote returns an INFO indicating
+// that TLS is required.
 func (cfg *leafNodeCfg) saveTLSHostname(u *url.URL) {
-	isTLS := cfg.TLSConfig != nil || u.Scheme == "tls"
-	if isTLS && cfg.tlsName == "" && net.ParseIP(u.Hostname()) == nil {
+	if cfg.tlsName == _EMPTY_ && net.ParseIP(u.Hostname()) == nil {
 		cfg.tlsName = u.Hostname()
 	}
 }
@@ -423,6 +459,7 @@ func (s *Server) startLeafNodeAcceptLoop() {
 	tlsVerify := tlsRequired && opts.LeafNode.TLSConfig.ClientAuth == tls.RequireAndVerifyClientCert
 	info := Info{
 		ID:           s.info.ID,
+		Name:         s.info.Name,
 		Version:      s.info.Version,
 		GitCommit:    gitCommit,
 		GoVersion:    runtime.Version(),
@@ -479,13 +516,15 @@ func (s *Server) startLeafNodeAcceptLoop() {
 var credsRe = regexp.MustCompile(`\s*(?:(?:[-]{3,}[^\n]*[-]{3,}\n)(.+)(?:\n\s*[-]{3,}[^\n]*[-]{3,}\n))`)
 
 // Lock should be held entering here.
-func (c *client) sendLeafConnect(clusterName string, tlsRequired bool) error {
+func (c *client) sendLeafConnect(clusterName string, tlsRequired, headers bool) error {
 	// We support basic user/pass and operator based user JWT with signatures.
 	cinfo := leafConnectInfo{
 		TLS:     tlsRequired,
-		Name:    c.srv.info.ID,
+		ID:      c.srv.info.ID,
+		Name:    c.srv.info.Name,
 		Hub:     c.leaf.remote.Hub,
 		Cluster: clusterName,
+		Headers: headers,
 	}
 
 	// Check for credentials first, that will take precedence..
@@ -662,6 +701,7 @@ func (s *Server) createLeafNode(conn net.Conn, remote *leafNodeCfg) *client {
 		s.generateNonce(nonce[:])
 	}
 	clusterName := s.info.Cluster
+	headers := s.supportsHeaders()
 	s.mu.Unlock()
 
 	// Grab lock
@@ -724,13 +764,16 @@ func (s *Server) createLeafNode(conn net.Conn, remote *leafNodeCfg) *client {
 		}
 
 		// Do TLS here as needed.
-		tlsRequired := remote.TLS || remote.TLSConfig != nil
+		remote.RLock()
+		remoteTLSConfig := remote.TLSConfig
+		tlsRequired := remote.TLS || remoteTLSConfig != nil
+		remote.RUnlock()
 		if tlsRequired {
 			c.Debugf("Starting TLS leafnode client handshake")
 			// Specify the ServerName we are expecting.
 			var tlsConfig *tls.Config
-			if remote.TLSConfig != nil {
-				tlsConfig = remote.TLSConfig.Clone()
+			if remoteTLSConfig != nil {
+				tlsConfig = remoteTLSConfig.Clone()
 			} else {
 				tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			}
@@ -793,7 +836,7 @@ func (s *Server) createLeafNode(conn net.Conn, remote *leafNodeCfg) *client {
 			}
 		}
 
-		if err := c.sendLeafConnect(clusterName, tlsRequired); err != nil {
+		if err := c.sendLeafConnect(clusterName, tlsRequired, headers); err != nil {
 			c.mu.Unlock()
 			c.closeConnection(ProtocolViolation)
 			return nil
@@ -856,7 +899,6 @@ func (s *Server) createLeafNode(conn net.Conn, remote *leafNodeCfg) *client {
 
 		// Leaf nodes will always require a CONNECT to let us know
 		// when we are properly bound to an account.
-		// The connection may have been closed
 		c.setAuthTimer(secondsToDuration(opts.LeafNode.AuthTimeout))
 	}
 
@@ -954,6 +996,16 @@ func (c *client) processLeafnodeInfo(info *Info) error {
 		}
 		supportsHeaders := c.srv.supportsHeaders()
 		c.headers = supportsHeaders && info.Headers
+
+		// Remember the remote server.
+		// Pre 2.2.0 servers are not sending their server name.
+		// In that case, use info.ID, which, for those servers, matches
+		// the content of the field `Name` in the leafnode CONNECT protocol.
+		if info.Name == _EMPTY_ {
+			c.leaf.remoteServer = info.ID
+		} else {
+			c.leaf.remoteServer = info.Name
+		}
 	}
 	// For both initial INFO and async INFO protocols, Possibly
 	// update our list of remote leafnode URLs we can connect to.
@@ -1058,7 +1110,7 @@ func (s *Server) setLeafNodeInfoHostPortAndIP() error {
 
 // Add the connection to the map of leaf nodes.
 // If `checkForDup` is true (invoked when a leafnode is accepted), then we check
-// if a connection already exists for the same server name (ID) and account.
+// if a connection already exists for the same server name and account.
 // That can happen when the remote is attempting to reconnect while the accepting
 // side did not detect the connection as broken yet.
 // But it can also happen when there is a misconfiguration and the remote is
@@ -1079,11 +1131,15 @@ func (s *Server) addLeafNodeConnection(c *client, srvName string, checkForDup bo
 
 	var old *client
 	s.mu.Lock()
-	if checkForDup {
+	// We check for empty because in some test we may send empty CONNECT{}
+	if checkForDup && srvName != _EMPTY_ {
 		for _, ol := range s.leafs {
 			ol.mu.Lock()
-			// We check for empty because in some test we may send empty CONNECT{}
-			if srvName != _EMPTY_ && ol.opts.Name == srvName && ol.acc.Name == accName {
+			// We care here only about non solicited Leafnode. This function
+			// is more about replacing stale connections than detecting loops.
+			// We have code for the loop detection elsewhere, which also delays
+			// attempt to reconnect.
+			if !ol.isSolicitedLeafNode() && ol.leaf.remoteServer == srvName && ol.acc.Name == accName {
 				old = ol
 			}
 			ol.mu.Unlock()
@@ -1126,9 +1182,11 @@ type leafConnectInfo struct {
 	Pass    string `json:"pass,omitempty"`
 	TLS     bool   `json:"tls_required"`
 	Comp    bool   `json:"compression,omitempty"`
+	ID      string `json:"server_id,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Hub     bool   `json:"is_hub,omitempty"`
 	Cluster string `json:"cluster,omitempty"`
+	Headers bool   `json:"headers,omitempty"`
 
 	// Just used to detect wrong connection attempts.
 	Gateway string `json:"gateway,omitempty"`
@@ -1162,11 +1220,21 @@ func (c *client) processLeafNodeConnect(s *Server, arg []byte, lang string) erro
 		return ErrWrongGateway
 	}
 
+	// Check if this server supports headers.
+	supportHeaders := c.srv.supportsHeaders()
+
 	c.mu.Lock()
 	// Leaf Nodes do not do echo or verbose or pedantic.
 	c.opts.Verbose = false
 	c.opts.Echo = false
 	c.opts.Pedantic = false
+	// This inbound connection will be marked as supporting headers if this server
+	// support headers and the remote has sent in the CONNECT protocol that it does
+	// support headers too.
+	c.headers = supportHeaders && proto.Headers
+
+	// Remember the remote server.
+	c.leaf.remoteServer = proto.Name
 
 	// If the other side has declared itself a hub, so we will take on the spoke role.
 	if proto.Hub {
@@ -1200,7 +1268,7 @@ func (c *client) processLeafNodeConnect(s *Server, arg []byte, lang string) erro
 // Returns the remote cluster name. This is set only once so does not require a lock.
 func (c *client) remoteCluster() string {
 	if c.leaf == nil {
-		return ""
+		return _EMPTY_
 	}
 	return c.leaf.remoteCluster
 }
@@ -1635,6 +1703,7 @@ func (c *client) handleLeafNodeLoop(sendErr bool) {
 	if sendErr {
 		c.sendErr(errTxt)
 	}
+
 	c.Errorf(errTxt)
 	// If we are here with "sendErr" false, it means that this is the server
 	// that received the error. The other side will have closed the connection,

@@ -349,7 +349,6 @@ func (s *Sublist) Insert(sub *subscription) error {
 			}
 		}
 		if n == nil {
-			isnew = true
 			n = newNode()
 			if lt > 1 {
 				l.nodes[t] = n
@@ -371,6 +370,7 @@ func (s *Sublist) Insert(sub *subscription) error {
 	}
 	if sub.queue == nil {
 		n.psubs[sub] = sub
+		isnew = len(n.psubs) == 1
 		if n.plist != nil {
 			n.plist = append(n.plist, sub)
 		} else if len(n.psubs) > plistMin {
@@ -383,6 +383,7 @@ func (s *Sublist) Insert(sub *subscription) error {
 	} else {
 		if n.qsubs == nil {
 			n.qsubs = make(map[string]map[*subscription]*subscription)
+			isnew = true
 		}
 		qname := string(sub.queue)
 		// This is a queue subscription
@@ -685,7 +686,7 @@ func (s *Sublist) remove(sub *subscription, shouldLock bool, doCacheUpdates bool
 		defer s.Unlock()
 	}
 
-	var sfwc, haswc, last bool
+	var sfwc, haswc bool
 	var n *node
 	l := s.root
 
@@ -722,7 +723,8 @@ func (s *Sublist) remove(sub *subscription, shouldLock bool, doCacheUpdates bool
 			l = nil
 		}
 	}
-	if !s.removeFromNode(n, sub) {
+	removed, last := s.removeFromNode(n, sub)
+	if !removed {
 		return ErrNotFound
 	}
 
@@ -732,7 +734,6 @@ func (s *Sublist) remove(sub *subscription, shouldLock bool, doCacheUpdates bool
 	for i := len(levels) - 1; i >= 0; i-- {
 		l, n, t := levels[i].l, levels[i].n, levels[i].t
 		if n.isEmpty() {
-			last = true
 			l.pruneNode(n, t)
 		}
 	}
@@ -820,9 +821,9 @@ func (l *level) numNodes() int {
 }
 
 // Remove the sub for the given node.
-func (s *Sublist) removeFromNode(n *node, sub *subscription) (found bool) {
+func (s *Sublist) removeFromNode(n *node, sub *subscription) (found, last bool) {
 	if n == nil {
-		return false
+		return false, true
 	}
 	if sub.queue == nil {
 		_, found = n.psubs[sub]
@@ -833,7 +834,7 @@ func (s *Sublist) removeFromNode(n *node, sub *subscription) (found bool) {
 			// to Match as needed.
 			n.plist = nil
 		}
-		return found
+		return found, len(n.psubs) == 0
 	}
 
 	// We have a queue group subscription here
@@ -842,8 +843,9 @@ func (s *Sublist) removeFromNode(n *node, sub *subscription) (found bool) {
 	delete(qsub, sub)
 	if len(qsub) == 0 {
 		delete(n.qsubs, string(sub.queue))
+		last = len(n.qsubs) == 0
 	}
-	return found
+	return found, last
 }
 
 // Count returns the number of subscriptions.
@@ -1393,5 +1395,74 @@ func (s *Sublist) collectAllSubs(l *level, subs *[]*subscription) {
 	if l.fwc != nil {
 		s.addAllNodeToSubs(l.fwc, subs)
 		s.collectAllSubs(l.fwc.next, subs)
+	}
+}
+
+// For a given subject (which may contain wildcards), this call returns all
+// subscriptions that would match that subject. For instance, suppose that
+// the sublist contains: foo.bar, foo.bar.baz and foo.baz, ReverseMatch("foo.*")
+// would return foo.bar and foo.baz.
+// This is used in situations where the sublist is likely to contain only
+// literals and one wants to get all the subjects that would have been a match
+// to a subscription on `subject`.
+func (s *Sublist) ReverseMatch(subject string) *SublistResult {
+	tsa := [32]string{}
+	tokens := tsa[:0]
+	start := 0
+	for i := 0; i < len(subject); i++ {
+		if subject[i] == btsep {
+			tokens = append(tokens, subject[start:i])
+			start = i + 1
+		}
+	}
+	tokens = append(tokens, subject[start:])
+
+	result := &SublistResult{}
+
+	s.Lock()
+	reverseMatchLevel(s.root, tokens, nil, result)
+	// Check for empty result.
+	if len(result.psubs) == 0 && len(result.qsubs) == 0 {
+		result = emptyResult
+	}
+	s.Unlock()
+
+	return result
+}
+
+func reverseMatchLevel(l *level, toks []string, n *node, results *SublistResult) {
+	for i, t := range toks {
+		if l == nil {
+			return
+		}
+		if len(t) == 1 {
+			if t[0] == fwc {
+				getAllNodes(l, results)
+				return
+			} else if t[0] == pwc {
+				for _, n := range l.nodes {
+					reverseMatchLevel(n.next, toks[i+1:], n, results)
+				}
+				return
+			}
+		}
+		n = l.nodes[t]
+		if n == nil {
+			break
+		}
+		l = n.next
+	}
+	if n != nil {
+		addNodeToResults(n, results)
+	}
+}
+
+func getAllNodes(l *level, results *SublistResult) {
+	if l == nil {
+		return
+	}
+	for _, n := range l.nodes {
+		addNodeToResults(n, results)
+		getAllNodes(n.next, results)
 	}
 }

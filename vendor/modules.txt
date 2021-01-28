@@ -31,6 +31,8 @@ github.com/hashicorp/golang-lru/simplelru
 # github.com/hokaccha/go-prettyjson v0.0.0-20190818114111-108c894c2c0e
 ## explicit
 github.com/hokaccha/go-prettyjson
+# github.com/klauspost/compress v1.11.7
+github.com/klauspost/compress/s2
 # github.com/lightstep/tracecontext.go v0.0.0-20181129014701-1757c391b1ac
 github.com/lightstep/tracecontext.go/traceparent
 github.com/lightstep/tracecontext.go/tracestate
@@ -49,12 +51,10 @@ github.com/nats-io/jsm.go/api/jetstream/advisory
 github.com/nats-io/jsm.go/api/jetstream/metric
 github.com/nats-io/jsm.go/api/server/advisory
 github.com/nats-io/jsm.go/api/server/metric
-# github.com/nats-io/jwt v1.0.1
-## explicit
-# github.com/nats-io/jwt/v2 v2.0.0-20201015190852-e11ce317263c
+# github.com/nats-io/jwt/v2 v2.0.0-20210125223648-1c24d462becc
 ## explicit
 github.com/nats-io/jwt/v2
-# github.com/nats-io/nats-server/v2 v2.1.8-0.20201204171240-e1b590db604e
+# github.com/nats-io/nats-server/v2 v2.1.8-0.20210128015521-76fdaea7ad21
 ## explicit
 github.com/nats-io/nats-server/v2/conf
 github.com/nats-io/nats-server/v2/internal/ldap
@@ -62,7 +62,7 @@ github.com/nats-io/nats-server/v2/logger
 github.com/nats-io/nats-server/v2/server
 github.com/nats-io/nats-server/v2/server/pse
 github.com/nats-io/nats-server/v2/server/sysmem
-# github.com/nats-io/nats.go v1.10.1-0.20201111151633-9e1f4a0d80d8
+# github.com/nats-io/nats.go v1.10.1-0.20210127212649-5b4924938a9a
 ## explicit
 github.com/nats-io/nats.go
 github.com/nats-io/nats.go/encoders/builtin
@@ -109,8 +109,9 @@ golang.org/x/crypto/bcrypt
 golang.org/x/crypto/blowfish
 golang.org/x/crypto/ed25519
 golang.org/x/crypto/ed25519/internal/edwards25519
-# golang.org/x/sys v0.0.0-20200202164722-d101bd2416d5
+# golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
 golang.org/x/sys/cpu
+golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 golang.org/x/sys/windows/registry

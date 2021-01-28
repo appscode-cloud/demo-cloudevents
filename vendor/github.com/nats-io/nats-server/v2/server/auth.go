@@ -238,7 +238,7 @@ func (s *Server) configureAuthorization() {
 	// This just checks and sets up the user map if we have multiple users.
 	if opts.CustomClientAuthentication != nil {
 		s.info.AuthRequired = true
-	} else if len(s.trustedKeys) > 0 {
+	} else if s.trustedKeys != nil {
 		s.info.AuthRequired = true
 	} else if opts.Nkeys != nil || opts.Users != nil {
 		s.nkeys, s.users = s.buildNkeysAndUsersFromOptions(opts.Nkeys, opts.Users)
@@ -253,6 +253,8 @@ func (s *Server) configureAuthorization() {
 
 	// Do similar for websocket config
 	s.wsConfigAuth(&opts.Websocket)
+	// And for mqtt config
+	s.mqttConfigAuth(&opts.MQTT)
 }
 
 // Takes the given slices of NkeyUser and User options and build
@@ -343,11 +345,15 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 	)
 	s.mu.Lock()
 	authRequired := s.info.AuthRequired
-	// c.ws is immutable, but may need lock if we get race reports.
-	if !authRequired && c.ws != nil {
+	if !authRequired {
 		// If no auth required for regular clients, then check if
-		// we have an override for websocket clients.
-		authRequired = s.websocket.authOverride
+		// we have an override for MQTT or Websocket clients.
+		switch c.clientType() {
+		case MQTT:
+			authRequired = s.mqtt.authOverride
+		case WS:
+			authRequired = s.websocket.authOverride
+		}
 	}
 	if !authRequired {
 		// TODO(dlc) - If they send us credentials should we fail?
@@ -361,20 +367,36 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 		noAuthUser string
 	)
 	tlsMap := opts.TLSMap
-	if c.ws != nil {
-		wo := &opts.Websocket
-		// Always override TLSMap.
-		tlsMap = wo.TLSMap
-		// The rest depends on if there was any auth override in
-		// the websocket's config.
-		if s.websocket.authOverride {
-			noAuthUser = wo.NoAuthUser
-			username = wo.Username
-			password = wo.Password
-			token = wo.Token
-			ao = true
+	if c.kind == CLIENT {
+		switch c.clientType() {
+		case MQTT:
+			mo := &opts.MQTT
+			// Always override TLSMap.
+			tlsMap = mo.TLSMap
+			// The rest depends on if there was any auth override in
+			// the mqtt's config.
+			if s.mqtt.authOverride {
+				noAuthUser = mo.NoAuthUser
+				username = mo.Username
+				password = mo.Password
+				token = mo.Token
+				ao = true
+			}
+		case WS:
+			wo := &opts.Websocket
+			// Always override TLSMap.
+			tlsMap = wo.TLSMap
+			// The rest depends on if there was any auth override in
+			// the websocket's config.
+			if s.websocket.authOverride {
+				noAuthUser = wo.NoAuthUser
+				username = wo.Username
+				password = wo.Password
+				token = wo.Token
+				ao = true
+			}
 		}
-	} else if c.kind == LEAF {
+	} else {
 		tlsMap = opts.LeafNode.TLSMap
 	}
 	if !ao {
@@ -538,9 +560,19 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 			c.Debugf("Account JWT not signed by trusted operator")
 			return false
 		}
-		if juc.IssuerAccount != "" && !acc.hasIssuer(juc.Issuer) {
+		if scope, ok := acc.hasIssuer(juc.Issuer); !ok {
 			c.Debugf("User JWT issuer is not known")
 			return false
+		} else if scope != nil {
+			if err := scope.ValidateScopedSigner(juc); err != nil {
+				c.Debugf("User JWT is not valid: %v", err)
+				return false
+			} else if uSc, ok := scope.(*jwt.UserScope); !ok {
+				c.Debugf("User JWT is not valid")
+				return false
+			} else {
+				juc.UserPermissionLimits = uSc.Template
+			}
 		}
 		if acc.IsExpired() {
 			c.Debugf("Account JWT has expired")
@@ -592,13 +624,23 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 			return false
 		}
 		// Hold onto the user's public key.
+		c.mu.Lock()
 		c.pubKey = juc.Subject
+		c.tags = juc.Tags
+		c.nameTag = juc.Name
+		c.mu.Unlock()
 
 		// Generate an event if we have a system account.
 		s.accountConnectEvent(c)
 
 		// Check if we need to set an auth timer if the user jwt expires.
 		c.setExpiration(juc.Claims(), validFor)
+
+		acc.mu.RLock()
+		c.Debugf("Authenticated JWT: %s %q (claim-name: %q, claim-tags: %q) "+
+			"signed with %q by Account %q (claim-name: %q, claim-tags: %q) signed with %q",
+			c.typeString(), juc.Subject, juc.Name, juc.Tags, juc.Issuer, issuer, acc.nameTag, acc.tags, acc.Issuer)
+		acc.mu.RUnlock()
 		return true
 	}
 
@@ -822,12 +864,12 @@ func (s *Server) isRouterAuthorized(c *client) bool {
 		return s.opts.CustomRouterAuthentication.Check(c)
 	}
 
-	if opts.Cluster.TLSMap || opts.Cluster.TLSCheckKnwonURLs {
+	if opts.Cluster.TLSMap || opts.Cluster.TLSCheckKnownURLs {
 		return checkClientTLSCertSubject(c, func(user string, _ *ldap.DN, isDNSAltName bool) (string, bool) {
 			if user == "" {
 				return "", false
 			}
-			if opts.Cluster.TLSCheckKnwonURLs && isDNSAltName {
+			if opts.Cluster.TLSCheckKnownURLs && isDNSAltName {
 				if dnsAltNameMatches(dnsAltNameLabels(user), opts.Routes) {
 					return "", true
 				}
@@ -1012,7 +1054,7 @@ func validateAllowedConnectionTypes(m map[string]struct{}) error {
 	for ct := range m {
 		ctuc := strings.ToUpper(ct)
 		switch ctuc {
-		case jwt.ConnectionTypeStandard, jwt.ConnectionTypeWebsocket, jwt.ConnectionTypeLeafnode:
+		case jwt.ConnectionTypeStandard, jwt.ConnectionTypeWebsocket, jwt.ConnectionTypeLeafnode, jwt.ConnectionTypeMqtt:
 		default:
 			return fmt.Errorf("unknown connection type %q", ct)
 		}
