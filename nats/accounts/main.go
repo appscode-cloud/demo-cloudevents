@@ -59,26 +59,6 @@ func main() {
 		panic(err)
 	}
 
-	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`//listen: -1
-jetstream: {max_mem_store: 10Gb, max_file_store: 10Gb}
-host: localhost
-port: 5222
-operator: %s
-resolver: {
-	type: full
-	dir: %s
-}
-system_account: %s
-websocket: {
-  host: 0.0.0.0
-  port: 9222
-  no_tls: true
-//  allowed_origins: ["https://appscode.ninja", "https://byte.builders","http://localhost:8080"]
-}`, confs.OpJwtPath, confs.ConfDir, sPub)), 0666)
-	if err != nil {
-		panic(err)
-	}
-
 	aKp, aPub, aJwt, err := CreateAccount("Admin", oKp)
 	if err != nil {
 		panic(err)
@@ -118,7 +98,7 @@ websocket: {
 	if err != nil {
 		panic(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "X.jwt"), []byte(xJwt), 0666); err != nil {
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "X-account.jwt"), []byte(xJwt), 0666); err != nil {
 		panic(err)
 	}
 	_, _, _, xCreds, err := CreateUser("x", xKp)
@@ -155,6 +135,9 @@ websocket: {
 	if err != nil {
 		panic(err)
 	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "Admin-account.jwt"), []byte(aJwt), 0666); err != nil {
+		panic(err)
+	}
 
 	//s, err := StartJSServer()
 	//if err != nil {
@@ -162,21 +145,51 @@ websocket: {
 	//}
 	//defer s.Shutdown()
 
-	var acr natsd.AccountResolver
-	acr, err = natsd.NewDirAccResolver(confs.ConfDir, 0, time.Duration(0), false)
+	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`//listen: -1
+jetstream: true
+//jetstream: {max_mem_store: 10Gb, max_file_store: 10Gb}
+host: localhost
+port: 5222
+operator: %s
+resolver: {
+	type: full
+	dir: %s
+}
+//resolver: MEMORY
+resolver_preload: {
+	%s : "%s"
+	%s : "%s"
+	%s : "%s"
+}
+system_account: %s
+websocket: {
+	host: 0.0.0.0
+ 	port: 9222
+ 	no_tls: true
+}
+`, confs.OpJwtPath, confs.ConfDir, sPub, sJwt, aPub, aJwt, xPub, xJwt, sPub)), 0666)
 	if err != nil {
 		panic(err)
 	}
 
-	if err = acr.Store(sPub, sJwt); err != nil {
-		panic(err)
-	}
-	if err = acr.Store(aPub, aJwt); err != nil {
-		panic(err)
-	}
-	if err = acr.Store(xPub, xJwt); err != nil {
-		panic(err)
-	}
+	/*
+		var acr natsd.AccountResolver
+		acr, err = natsd.NewDirAccResolver(confs.ConfDir, 0, time.Duration(0), false)
+		if err != nil {
+			panic(err)
+		}
+
+		if err = acr.Store(sPub, sJwt); err != nil {
+			panic(err)
+		}
+		if err = acr.Store(aPub, aJwt); err != nil {
+			panic(err)
+		}
+		if err = acr.Store(xPub, xJwt); err != nil {
+			panic(err)
+		}
+	*/
+
 	log.Println("Everything is okay, I guess")
 }
 
@@ -256,7 +269,7 @@ func CreateAccount(name string, oKp nkeys.KeyPair) (nkeys.KeyPair, string, strin
 
 	claim := jwt.NewAccountClaims(aPub)
 	claim.Name = name
-	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 3, Consumer: 4}
+	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 10, Consumer: 10}
 	aJwt, err := claim.Encode(oKp)
 	if err != nil {
 		return nil, "", "", err
