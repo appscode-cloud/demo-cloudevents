@@ -42,7 +42,7 @@ github.com/mattn/go-colorable
 github.com/mattn/go-isatty
 # github.com/minio/highwayhash v1.0.0
 github.com/minio/highwayhash
-# github.com/nats-io/jsm.go v0.0.20
+# github.com/nats-io/jsm.go v0.0.21-0.20210129104357-048056bcf814
 ## explicit
 github.com/nats-io/jsm.go
 github.com/nats-io/jsm.go/api
@@ -51,10 +51,10 @@ github.com/nats-io/jsm.go/api/jetstream/advisory
 github.com/nats-io/jsm.go/api/jetstream/metric
 github.com/nats-io/jsm.go/api/server/advisory
 github.com/nats-io/jsm.go/api/server/metric
-# github.com/nats-io/jwt/v2 v2.0.0-20210125223648-1c24d462becc
+# github.com/nats-io/jwt/v2 v2.0.0-20210130010708-9bde681a361b
 ## explicit
 github.com/nats-io/jwt/v2
-# github.com/nats-io/nats-server/v2 v2.1.8-0.20210128015521-76fdaea7ad21
+# github.com/nats-io/nats-server/v2 v2.1.8-0.20210131171733-50d6074cfa67
 ## explicit
 github.com/nats-io/nats-server/v2/conf
 github.com/nats-io/nats-server/v2/internal/ldap

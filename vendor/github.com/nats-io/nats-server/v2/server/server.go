@@ -1380,9 +1380,11 @@ func (s *Server) fetchAccount(name string) (*Account, error) {
 	}
 	// The sub imports may have been setup but will not have had their
 	// subscriptions properly setup. Do that here.
-	if len(acc.imports.services) > 0 && acc.ic == nil {
-		acc.ic = s.createInternalAccountClient()
-		acc.ic.acc = acc
+	if len(acc.imports.services) > 0 {
+		if acc.ic == nil {
+			acc.ic = s.createInternalAccountClient()
+			acc.ic.acc = acc
+		}
 		acc.addAllServiceImportSubs()
 	}
 	return acc, nil
@@ -1553,6 +1555,13 @@ func (s *Server) Start() {
 		s.startGateways()
 	}
 
+	// Start websocket server if needed. Do this before starting the routes, and
+	// leaf node because we want to resolve the gateway host:port so that this
+	// information can be sent to other routes.
+	if opts.Websocket.Port != 0 {
+		s.startWebsocketServer()
+	}
+
 	// Start up listen if we want to accept leaf node connections.
 	if opts.LeafNode.Port != 0 {
 		// Will resolve or assign the advertise address for the leafnode listener.
@@ -1577,13 +1586,6 @@ func (s *Server) Start() {
 	// The Routing routine needs to wait for the client listen
 	// port to be opened and potential ephemeral port selected.
 	clientListenReady := make(chan struct{})
-
-	// Start websocket server if needed. Do this before starting the routes,
-	// because we want to resolve the gateway host:port so that this information
-	// can be sent to other routes.
-	if opts.Websocket.Port != 0 {
-		s.startWebsocketServer()
-	}
 
 	// MQTT
 	if opts.MQTT.Port != 0 {
@@ -2262,40 +2264,17 @@ func (s *Server) createClient(conn net.Conn) *client {
 
 	// Check for TLS
 	if !isClosed && tlsRequired {
-		c.Debugf("Starting TLS client connection handshake")
 		// If we have a prebuffer create a multi-reader.
 		if len(pre) > 0 {
 			c.nc = &tlsMixConn{c.nc, bytes.NewBuffer(pre)}
 			// Clear pre so it is not parsed.
 			pre = nil
 		}
-
-		c.nc = tls.Server(c.nc, opts.TLSConfig)
-		conn := c.nc.(*tls.Conn)
-
-		// Setup the timeout
-		ttl := secondsToDuration(opts.TLSTimeout)
-		time.AfterFunc(ttl, func() { tlsTimeout(c, conn) })
-		conn.SetReadDeadline(time.Now().Add(ttl))
-
-		// Force handshake
-		c.mu.Unlock()
-		if err := conn.Handshake(); err != nil {
-			c.Errorf("TLS handshake error: %v", err)
-			c.closeConnection(TLSHandshakeError)
+		// Performs server-side TLS handshake.
+		if err := c.doTLSServerHandshake(_EMPTY_, opts.TLSConfig, opts.TLSTimeout); err != nil {
+			c.mu.Unlock()
 			return nil
 		}
-		// Reset the read deadline
-		conn.SetReadDeadline(time.Time{})
-
-		// Re-Grab lock
-		c.mu.Lock()
-
-		// Indicate that handshake is complete (used in monitoring)
-		c.flags.set(handshakeComplete)
-
-		// The connection may have been closed
-		isClosed = c.isClosed()
 	}
 
 	// If connection is marked as closed, bail out.
@@ -2922,9 +2901,9 @@ func (s *Server) PortsInfo(maxWait time.Duration) *Ports {
 		}
 
 		if wsListener != nil {
-			protocol := "ws"
+			protocol := wsSchemePrefix
 			if wss {
-				protocol = "wss"
+				protocol = wsSchemePrefixTLS
 			}
 			ports.WebSocket = formatURL(protocol, wsListener)
 		}

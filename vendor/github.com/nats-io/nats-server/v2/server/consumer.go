@@ -217,6 +217,7 @@ type Consumer struct {
 	ca      *consumerAssignment
 	node    RaftNode
 	infoSub *subscription
+	lqsent  time.Time
 }
 
 const (
@@ -581,14 +582,22 @@ func (mset *Stream) addConsumer(config *ConsumerConfig, oname string, ca *consum
 	mset.setConsumer(o)
 	mset.mu.Unlock()
 
-	if !s.JetStreamIsClustered() {
+	if !s.JetStreamIsClustered() && s.standAloneMode() {
 		o.setLeader(true)
 	}
 
 	// This is always true in single server mode.
 	if o.isLeader() {
 		// Send advisory.
-		o.sendCreateAdvisory()
+		var suppress bool
+		if !s.standAloneMode() && ca == nil {
+			suppress = true
+		} else if ca != nil {
+			suppress = ca.responded
+		}
+		if !suppress {
+			o.sendCreateAdvisory()
+		}
 	}
 
 	return o, nil
@@ -2316,6 +2325,16 @@ func (mset *Stream) DeleteConsumer(o *Consumer) error {
 	return o.Delete()
 }
 
+func (o *Consumer) Stream() string {
+	o.mu.RLock()
+	mset := o.mset
+	o.mu.RUnlock()
+	if mset != nil {
+		return mset.Name()
+	}
+	return _EMPTY_
+}
+
 // Active indicates if this consumer is still active.
 func (o *Consumer) Active() bool {
 	o.mu.Lock()
@@ -2598,4 +2617,11 @@ func (o *Consumer) decStreamPending(sseq uint64, subj string) {
 		o.sgap--
 	}
 	o.mu.Unlock()
+}
+
+func (o *Consumer) account() *Account {
+	o.mu.RLock()
+	a := o.acc
+	o.mu.RUnlock()
+	return a
 }

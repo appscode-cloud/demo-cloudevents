@@ -79,6 +79,16 @@ $ nats -s nats://localhost:5222 sub 'Notifications' --creds confs/ac_store/x.cre
 $ nats -s nats://localhost:5222 pub 'user.x.Notifications' "Hello there 6" --creds confs/ac_store/admin.creds
 ```
 
+## Push Consumer
+
+```shell
+$ go run push-consumer/main.go
+```
+
+- It creates a `stream` for subject `Notifications` and also a push based consumer with with `DeliveryTarget : my.Notifications`.
+- After creating these, messages are published to `user.x.Notifications` by admin.
+- Then user x listens to `my.Notifications` and acknowledges them.
+
 ## TODO:
 
 - License server creates a BB account (issues nats account, uses BB user_id as user.{user_id} stream prefix)

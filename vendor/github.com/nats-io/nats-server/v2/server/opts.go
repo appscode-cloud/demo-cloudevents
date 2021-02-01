@@ -147,6 +147,15 @@ type RemoteLeafOpts struct {
 	Hub          bool        `json:"hub,omitempty"`
 	DenyImports  []string    `json:"-"`
 	DenyExports  []string    `json:"-"`
+
+	// When an URL has the "ws" (or "wss") scheme, then the server will initiate the
+	// connection as a websocket connection. By default, the websocket frames will be
+	// masked (as if this server was a websocket client to the remote server). The
+	// NoMasking option will change this behavior and will send umasked frames.
+	Websocket struct {
+		Compression bool `json:"-"`
+		NoMasking   bool `json:"-"`
+	}
 }
 
 // Options block for nats-server.
@@ -229,7 +238,6 @@ type Options struct {
 	TrustedOperators         []*jwt.OperatorClaims `json:"-"`
 	AccountResolver          AccountResolver       `json:"-"`
 	AccountResolverTLSConfig *tls.Config           `json:"-"`
-	resolverPreloads         map[string]string
 
 	CustomClientAuthentication Authentication `json:"-"`
 	CustomRouterAuthentication Authentication `json:"-"`
@@ -255,6 +263,10 @@ type Options struct {
 	// defined in config and/or command line params.
 	inConfig  map[string]bool
 	inCmdLine map[string]bool
+
+	// private fields for operator mode
+	operatorJWT      []string
+	resolverPreloads map[string]string
 
 	// private fields, used for testing
 	gatewaysSolicitDelay time.Duration
@@ -853,12 +865,13 @@ func (o *Options) processConfigFileLine(k string, v interface{}, errors *[]error
 		// Assume for now these are file names, but they can also be the JWT itself inline.
 		o.TrustedOperators = make([]*jwt.OperatorClaims, 0, len(opFiles))
 		for _, fname := range opFiles {
-			opc, err := ReadOperatorJWT(fname)
+			theJWT, opc, err := readOperatorJWT(fname)
 			if err != nil {
 				err := &configErr{tk, fmt.Sprintf("error parsing operator JWT: %v", err)}
 				*errors = append(*errors, err)
 				continue
 			}
+			o.operatorJWT = append(o.operatorJWT, theJWT)
 			o.TrustedOperators = append(o.TrustedOperators, opc)
 		}
 		if len(o.TrustedOperators) == 1 {
@@ -1798,6 +1811,10 @@ func parseRemoteLeafNodes(v interface{}, errors *[]error, warnings *[]error) ([]
 					continue
 				}
 				remote.DenyExports = subjects
+			case "ws_compress", "ws_compression", "websocket_compress", "websocket_compression":
+				remote.Websocket.Compression = v.(bool)
+			case "ws_no_masking", "websocket_no_masking":
+				remote.Websocket.NoMasking = v.(bool)
 			default:
 				if !tk.IsUsedVariable() {
 					err := &unknownConfigFieldErr{
@@ -3541,7 +3558,7 @@ func parseWebsocket(v interface{}, o *Options, errors *[]error, warnings *[]erro
 				*errors = append(*errors, err)
 			}
 			o.Websocket.HandshakeTimeout = ht
-		case "compression":
+		case "compress", "compression":
 			o.Websocket.Compression = mv.(bool)
 		case "authorization", "authentication":
 			auth := parseSimpleAuth(tk, errors, warnings)

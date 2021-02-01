@@ -37,6 +37,7 @@ type RaftNode interface {
 	State() RaftState
 	Size() (entries, bytes uint64)
 	Leader() bool
+	Quorum() bool
 	Current() bool
 	GroupLeader() string
 	StepDown() error
@@ -63,6 +64,11 @@ type WAL interface {
 	State() StreamState
 	Stop() error
 	Delete() error
+}
+
+type LeadChange struct {
+	Leader   bool
+	Previous string
 }
 
 type Peer struct {
@@ -198,6 +204,8 @@ var (
 	errCorruptPeers    = errors.New("raft: corrupt peer state")
 	errStepdownFailed  = errors.New("raft: stepdown failed")
 	errPeersNotCurrent = errors.New("raft: all peers are not current")
+	errFailedToApply   = errors.New("raft: could not place apply entry")
+	errEntryLoadFailed = errors.New("raft: could not load entry from WAL")
 )
 
 // This will bootstrap a raftNode by writing its config into the store directory.
@@ -266,7 +274,7 @@ func (s *Server) startRaftNode(cfg *RaftConfig) (RaftNode, error) {
 		votes:    make(chan *voteResponse, 8),
 		resp:     make(chan *appendEntryResponse, 256),
 		propc:    make(chan *Entry, 256),
-		applyc:   make(chan *CommittedEntry, 256),
+		applyc:   make(chan *CommittedEntry, 512),
 		leadc:    make(chan bool, 4),
 		stepdown: make(chan string, 4),
 	}
@@ -286,7 +294,7 @@ func (s *Server) startRaftNode(cfg *RaftConfig) (RaftNode, error) {
 		if first, err := n.loadFirstEntry(); err == nil {
 			n.pterm, n.pindex = first.pterm, first.pindex
 			if first.commit > 0 {
-				n.commit = first.commit - 1
+				n.commit = first.commit
 			}
 		}
 		// Replay the log.
@@ -437,7 +445,7 @@ func (n *raft) Propose(data []byte) error {
 		case <-paused:
 		case <-quit:
 			return errProposalFailed
-		case <-time.After(400 * time.Millisecond):
+		case <-time.After(422 * time.Millisecond):
 			return errProposalsPaused
 		}
 	}
@@ -528,10 +536,11 @@ func (n *raft) ResumeApply() {
 	// Run catchup..
 	if n.hcommit > n.commit {
 		for index := n.commit + 1; index <= n.hcommit; index++ {
-			n.applyCommit(index)
+			if err := n.applyCommit(index); err != nil {
+				break
+			}
 		}
 	}
-
 	n.paused = false
 	n.hcommit = 0
 }
@@ -689,13 +698,12 @@ func (n *raft) StepDown() error {
 	if maybeLeader != noLeader {
 		n.debug("Stepping down, selected %q for new leader", maybeLeader)
 		n.sendAppendEntry([]*Entry{&Entry{EntryLeaderTransfer, []byte(maybeLeader)}})
-	} else {
-		// Force us to stepdown here.
-		select {
-		case stepdown <- noLeader:
-		default:
-			return errStepdownFailed
-		}
+	}
+	// Force us to stepdown here.
+	select {
+	case stepdown <- noLeader:
+	default:
+		return errStepdownFailed
 	}
 	return nil
 }
@@ -754,9 +762,6 @@ func (n *raft) Group() string {
 func (n *raft) Peers() []*Peer {
 	n.RLock()
 	defer n.RUnlock()
-	if n.state != Leader {
-		return nil
-	}
 
 	var peers []*Peer
 	for id, ps := range n.peers {
@@ -1174,6 +1179,7 @@ func (n *raft) runAsLeader() {
 				n.switchToFollower(noLeader)
 				return
 			}
+
 		case vresp := <-n.votes:
 			if vresp.term > n.currentTerm() {
 				n.switchToFollower(noLeader)
@@ -1196,9 +1202,30 @@ func (n *raft) runAsLeader() {
 	}
 }
 
+// Quorum reports the quorum status. Will be called on former leaders.
+func (n *raft) Quorum() bool {
+	n.RLock()
+	defer n.RUnlock()
+
+	now, nc := time.Now().UnixNano(), 1
+	for _, peer := range n.peers {
+		if now-peer.ts < int64(lostQuorumInterval) {
+			nc++
+			if nc >= n.qn {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (n *raft) lostQuorum() bool {
 	n.RLock()
 	defer n.RUnlock()
+	return n.lostQuorumLocked()
+}
+
+func (n *raft) lostQuorumLocked() bool {
 	now, nc := time.Now().UnixNano(), 1
 	for _, peer := range n.peers {
 		if now-peer.ts < int64(lostQuorumInterval) {
@@ -1279,6 +1306,9 @@ func (n *raft) runCatchup(peer, subj string, indexUpdatesC <-chan uint64) {
 	timeout := time.NewTimer(activityInterval)
 	defer timeout.Stop()
 
+	stepCheck := time.NewTicker(100 * time.Millisecond)
+	defer stepCheck.Stop()
+
 	// Run as long as we are leader and still not caught up.
 	for n.Leader() {
 		select {
@@ -1286,6 +1316,11 @@ func (n *raft) runCatchup(peer, subj string, indexUpdatesC <-chan uint64) {
 			return
 		case <-n.quit:
 			return
+		case <-stepCheck.C:
+			if !n.Leader() {
+				n.debug("Catching up canceled, no longer leader")
+				return
+			}
 		case <-timeout.C:
 			n.debug("Catching up for %q stalled", peer)
 			return
@@ -1355,10 +1390,10 @@ func (n *raft) loadEntry(index uint64) (*appendEntry, error) {
 
 // applyCommit will update our commit index and apply the entry to the apply chan.
 // lock should be held.
-func (n *raft) applyCommit(index uint64) {
+func (n *raft) applyCommit(index uint64) error {
 	if index <= n.commit {
 		n.debug("Ignoring apply commit for %d, already processed", index)
-		return
+		return nil
 	}
 	original := n.commit
 	n.commit = index
@@ -1372,7 +1407,7 @@ func (n *raft) applyCommit(index uint64) {
 	if err != nil {
 		n.debug("Got an error loading %d index: %v", index, err)
 		n.commit = original
-		return
+		return errEntryLoadFailed
 	}
 	ae.buf = nil
 
@@ -1407,11 +1442,13 @@ func (n *raft) applyCommit(index uint64) {
 		default:
 			n.debug("Failed to place committed entry onto our apply channel")
 			n.commit = original
+			return errFailedToApply
 		}
 	} else {
 		// If we processed inline update our applied index.
 		n.applied = index
 	}
+	return nil
 }
 
 // Used to track a success response and apply entries.
@@ -1449,7 +1486,9 @@ func (n *raft) trackResponse(ar *appendEntryResponse) {
 		if nr := len(results); nr >= n.qn {
 			// We have a quorum.
 			for index := n.commit + 1; index <= ar.index; index++ {
-				n.applyCommit(index)
+				if err := n.applyCommit(index); err != nil {
+					break
+				}
 			}
 			sendHB = len(n.propc) == 0
 		}
@@ -1570,7 +1609,7 @@ func (n *raft) catchupStalled() bool {
 // Lock should be held.
 func (n *raft) createCatchup(ae *appendEntry) string {
 	// Cleanup any old ones.
-	if n.catchup != nil {
+	if n.catchup != nil && n.catchup.sub != nil {
 		n.s.sysUnsubscribe(n.catchup.sub)
 	}
 	// Snapshot term and index.
@@ -1679,6 +1718,7 @@ func (n *raft) processAppendEntry(ae *appendEntry, sub *subscription) {
 		n.writeTermVote()
 		if isNew {
 			n.resetElectionTimeout()
+			n.updateLeadChange(false)
 		}
 	}
 
@@ -1730,8 +1770,6 @@ func (n *raft) processAppendEntry(ae *appendEntry, sub *subscription) {
 					if maybeLeader == n.id {
 						n.campaign()
 					}
-					// This will not have commits follow. We also know this will be by itself.
-					n.commit = ae.pindex + 1
 				}
 			case EntryAddPeer:
 				if newPeer := string(e.Data); len(newPeer) == idLen {
@@ -1757,7 +1795,9 @@ func (n *raft) processAppendEntry(ae *appendEntry, sub *subscription) {
 			n.debug("Paused, not applying %d", ae.commit)
 		} else {
 			for index := n.commit + 1; index <= ae.commit; index++ {
-				n.applyCommit(index)
+				if err := n.applyCommit(index); err != nil {
+					break
+				}
 			}
 		}
 	}
@@ -1806,6 +1846,11 @@ func (n *raft) storeToWAL(ae *appendEntry) error {
 	seq, _, err := n.wal.StoreMsg(_EMPTY_, nil, ae.buf)
 	if err != nil {
 		return err
+	}
+
+	// Sanity checking for now.
+	if ae.pindex != seq-1 {
+		panic(fmt.Sprintf("[%s] Placed an entry at the wrong index, ae is %+v, index is %d\n\n", n.s, ae, seq))
 	}
 
 	n.pterm = ae.term
@@ -2066,11 +2111,13 @@ func (n *raft) processVoteRequest(vr *voteRequest) error {
 
 	// If this is a higher term go ahead and stepdown.
 	if vr.term > n.term {
-		n.debug("Stepping down from candidate, detected higher term: %d vs %d", vr.term, n.term)
 		n.term = vr.term
 		n.vote = noVote
 		n.writeTermVote()
-		n.attemptStepDown(noLeader)
+		if n.state == Candidate {
+			n.debug("Stepping down from candidate, detected higher term: %d vs %d", vr.term, n.term)
+			n.attemptStepDown(noLeader)
+		}
 	}
 
 	// Only way we get to yes is through here.
@@ -2190,6 +2237,9 @@ func (n *raft) switchToCandidate() {
 	defer n.Unlock()
 	if n.state != Candidate {
 		n.notice("Switching to candidate")
+	} else if n.lostQuorumLocked() {
+		// We signal to the upper layers such that can alert on quorum lost.
+		n.updateLeadChange(false)
 	}
 	// Increment the term.
 	n.term++

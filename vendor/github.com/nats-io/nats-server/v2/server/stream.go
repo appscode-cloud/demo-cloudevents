@@ -122,6 +122,7 @@ type Stream struct {
 	ddindex   int
 	ddtmr     *time.Timer
 	qch       chan struct{}
+	active    bool
 
 	// Clustered mode.
 	sa      *streamAssignment
@@ -131,6 +132,7 @@ type Stream struct {
 	infoSub *subscription
 	clseq   uint64
 	clfs    uint64
+	lqsent  time.Time
 }
 
 // Headers for published messages.
@@ -265,7 +267,8 @@ func (a *Account) addStream(config *StreamConfig, fsConfig *FileStoreConfig, sa 
 	}
 
 	// Call directly to set leader if not in clustered mode.
-	if !s.JetStreamIsClustered() {
+	// This can be called though before we actually setup clustering, so check both.
+	if !s.JetStreamIsClustered() && s.standAloneMode() {
 		if err := mset.setLeader(true); err != nil {
 			mset.Delete()
 			return nil, err
@@ -279,7 +282,15 @@ func (a *Account) addStream(config *StreamConfig, fsConfig *FileStoreConfig, sa 
 
 	if isLeader {
 		// Send advisory.
-		mset.sendCreateAdvisory()
+		var suppress bool
+		if !s.standAloneMode() && sa == nil {
+			suppress = true
+		} else if sa != nil {
+			suppress = sa.responded
+		}
+		if !suppress {
+			mset.sendCreateAdvisory()
+		}
 	}
 
 	return mset, nil
@@ -308,6 +319,9 @@ func (mset *Stream) setLeader(isLeader bool) error {
 	mset.mu.Lock()
 	// If we are here we have a change in leader status.
 	if isLeader {
+		// Make sure we are listening for sync requests.
+		// TODO(dlc) - Original design was that all in sync members of the group would do DQ.
+		mset.startClusterSubs()
 		// Setup subscriptions
 		if err := mset.subscribeToStream(); err != nil {
 			mset.mu.Unlock()
@@ -315,9 +329,6 @@ func (mset *Stream) setLeader(isLeader bool) error {
 			mset.Delete()
 			return err
 		}
-		// Make sure we are listening for sync requests.
-		// TODO(dlc) - Original design was that all in sync members of the group would do DQ.
-		mset.startClusterSubs()
 	} else {
 		// Stop responding to sync requests.
 		mset.stopClusterSubs()
@@ -494,10 +505,12 @@ func (mset *Stream) sendCreateAdvisory() {
 	}
 
 	j, err := json.MarshalIndent(m, "", "  ")
-	if err == nil {
-		subj := JSAdvisoryStreamCreatedPre + "." + name
-		sendq <- &jsPubMsg{subj, subj, _EMPTY_, nil, j, nil, 0}
+	if err != nil {
+		return
 	}
+
+	subj := JSAdvisoryStreamCreatedPre + "." + name
+	sendq <- &jsPubMsg{subj, subj, _EMPTY_, nil, j, nil, 0}
 }
 
 func (mset *Stream) sendDeleteAdvisoryLocked() {
@@ -667,16 +680,6 @@ func (mset *Stream) FileStoreConfig() (FileStoreConfig, error) {
 
 // Delete deletes a stream from the owning account.
 func (mset *Stream) Delete() error {
-	mset.mu.Lock()
-	jsa := mset.jsa
-	mset.mu.Unlock()
-	if jsa == nil {
-		return ErrJetStreamNotEnabledForAccount
-	}
-	jsa.mu.Lock()
-	delete(jsa.streams, mset.config.Name)
-	jsa.mu.Unlock()
-
 	return mset.delete()
 }
 
@@ -764,7 +767,14 @@ func (mset *Stream) Update(config *StreamConfig) error {
 	}
 	// Now update config and store's version of our config.
 	mset.config = cfg
-	mset.sendUpdateAdvisoryLocked()
+
+	var suppress bool
+	if mset.isClustered() && mset.sa != nil {
+		suppress = mset.sa.responded
+	}
+	if !suppress {
+		mset.sendUpdateAdvisoryLocked()
+	}
 	mset.mu.Unlock()
 
 	mset.store.UpdateConfig(&cfg)
@@ -832,11 +842,15 @@ func (mset *Stream) removeMsg(seq uint64, secure bool) (bool, error) {
 // Will create internal subscriptions for the stream.
 // Lock should be held.
 func (mset *Stream) subscribeToStream() error {
+	if mset.active {
+		return nil
+	}
 	for _, subject := range mset.config.Subjects {
 		if _, err := mset.subscribeInternal(subject, mset.processInboundJetStreamMsg); err != nil {
 			return err
 		}
 	}
+	mset.active = true
 	return nil
 }
 
@@ -846,6 +860,7 @@ func (mset *Stream) unsubscribeToStream() error {
 	for _, subject := range mset.config.Subjects {
 		mset.unsubscribeInternal(subject)
 	}
+	mset.active = false
 	return nil
 }
 
@@ -884,12 +899,8 @@ func (mset *Stream) unsubscribeInternal(subject string) error {
 	if c == nil {
 		return fmt.Errorf("invalid stream")
 	}
-	if !c.srv.eventsEnabled() {
-		return ErrNoSysAccount
-	}
 
 	var sid []byte
-
 	c.mu.Lock()
 	for _, sub := range c.subs {
 		if subject == string(sub.subject) {
@@ -1390,6 +1401,9 @@ func (mset *Stream) setupSendCapabilities() {
 
 // Name returns the stream name.
 func (mset *Stream) Name() string {
+	if mset == nil {
+		return _EMPTY_
+	}
 	mset.mu.Lock()
 	defer mset.mu.Unlock()
 	return mset.config.Name
@@ -1457,11 +1471,24 @@ func (mset *Stream) internalSendLoop() {
 
 // Internal function to delete a stream.
 func (mset *Stream) delete() error {
-	return mset.stop(true)
+	return mset.stop(true, true)
 }
 
 // Internal function to stop or delete the stream.
-func (mset *Stream) stop(delete bool) error {
+func (mset *Stream) stop(deleteFlag, advisory bool) error {
+	mset.mu.RLock()
+	jsa := mset.jsa
+	mset.mu.RUnlock()
+
+	if jsa == nil {
+		return ErrJetStreamNotEnabledForAccount
+	}
+
+	// Remove from our account map.
+	jsa.mu.Lock()
+	delete(jsa.streams, mset.config.Name)
+	jsa.mu.Unlock()
+
 	// Clean up consumers.
 	mset.mu.Lock()
 	var obs []*Consumer
@@ -1475,7 +1502,7 @@ func (mset *Stream) stop(delete bool) error {
 		// Second flag says do not broadcast to signal.
 		// TODO(dlc) - If we have an err here we don't want to stop
 		// but should we log?
-		o.stop(delete, false, delete)
+		o.stop(deleteFlag, false, advisory)
 	}
 
 	mset.mu.Lock()
@@ -1488,7 +1515,7 @@ func (mset *Stream) stop(delete bool) error {
 
 	// Cluster cleanup
 	if n := mset.node; n != nil {
-		if delete {
+		if deleteFlag {
 			n.Delete()
 		} else {
 			n.Stop()
@@ -1497,7 +1524,7 @@ func (mset *Stream) stop(delete bool) error {
 	}
 
 	// Send stream delete advisory after the consumers.
-	if delete {
+	if deleteFlag && advisory {
 		mset.sendDeleteAdvisoryLocked()
 	}
 
@@ -1536,7 +1563,7 @@ func (mset *Stream) stop(delete bool) error {
 		return nil
 	}
 
-	if delete {
+	if deleteFlag {
 		if err := mset.store.Delete(); err != nil {
 			return err
 		}
