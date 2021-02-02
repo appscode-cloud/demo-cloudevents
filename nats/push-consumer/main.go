@@ -52,8 +52,8 @@ func main() {
 	go PublishMessage("user.x.Notifications", adminnc)
 
 	// Populate pull consumer
-	fmt.Println("Populating pull consumer")
-	time.Sleep(4 * time.Second)
+	//fmt.Println("Populating pull consumer")
+	//time.Sleep(4 * time.Second)
 
 	ReadMessage("my.Notifications", nc)
 }

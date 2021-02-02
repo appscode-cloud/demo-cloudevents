@@ -6,30 +6,14 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
-	natsd "github.com/nats-io/nats-server/v2/server"
+	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
 
 	"github.com/nats-io/jwt/v2"
+	natsd "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nkeys"
-
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
 )
-
-var (
-	oSeed = []byte("SOABRGE6JOE7POOXTQ2UYPCADQD776UTJIMQHZQE4TS6TKYFPN3RXHCBKE")
-	oJwt  = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJhdWQiOiJPQ0xUUlVHS0xBNVVTRFlSTTNKV1pONEdUVUVHT0VHQzc1U1NQNFJRQkhQSlk2TU5KR0lEVlZIVSIsImV4cCI6MTkxODkwMjAwMCwianRpIjoiMlYyWEZMTlRaTVNVWVpKUksyUzJRVjVWWVEzVzVFQUI3T0hZM0pRTU5EWENFN1kzQVFOQSIsImlhdCI6MTYwMzM2OTIwMCwiaXNzIjoiT0NMVFJVR0tMQTVVU0RZUk0zSldaTjRHVFVFR09FR0M3NVNTUDRSUUJIUEpZNk1OSkdJRFZWSFUiLCJuYW1lIjoiS08iLCJuYmYiOjE2MDMzNjkyMDAsInN1YiI6Ik9DTFRSVUdLTEE1VVNEWVJNM0pXWk40R1RVRUdPRUdDNzVTU1A0UlFCSFBKWTZNTkpHSURWVkhVIiwibmF0cyI6eyJzaWduaW5nX2tleXMiOlsiT0NMVFJVR0tMQTVVU0RZUk0zSldaTjRHVFVFR09FR0M3NVNTUDRSUUJIUEpZNk1OSkdJRFZWSFUiXSwidHlwZSI6Im9wZXJhdG9yIiwidmVyc2lvbiI6Mn19.LWIGE00WEHSdIVusOzKBM_26r7usi_0vJj2tGQA_6U9FheGO5qqg50FZQ568e11O8NhnyLZ_9PA_rObTQ2DyDg"
-	oKp   nkeys.KeyPair
-)
-
-func init() {
-	var err error
-	oKp, err = nkeys.FromSeed(oSeed)
-	if err != nil {
-		panic(fmt.Sprintf("Parsing oSeed failed with: %v", err))
-	}
-}
 
 func main() {
 	println("Configuration directory: ", confs.ConfDir, "\n")
@@ -37,17 +21,12 @@ func main() {
 		panic(err)
 	}
 
-	oKp, _, oSeed, oJwt, err := CreateOperator("KO")
+	oKp, oPub, oSeed, oJwt, err := CreateOperator("KO")
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(string(oSeed))
-	if err := ioutil.WriteFile(confs.OpJwtPath, []byte(oJwt), 0666); err != nil {
-		panic(err)
-	}
-	//return
 
-	sKp, sPub, sJwt, err := CreateAccount("SYS", oKp)
+	sKp, sPub, sSeed, sJwt, err := CreateAccount("SYS", oKp)
 	if err != nil {
 		panic(err)
 	}
@@ -55,27 +34,26 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err = ioutil.WriteFile(confs.SysCredFile, []byte(sCreds), 0666); err != nil {
-		panic(err)
-	}
 
-	aKp, aPub, aJwt, err := CreateAccount("Admin", oKp)
+	aKp, aPub, aSeed, aJwt, err := CreateAccount("Admin", oKp)
 	if err != nil {
 		panic(err)
 	}
-
 	_, _, _, aCreds, err := CreateUser("admin", aKp)
 	if err != nil {
 		panic(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "admin.creds"), aCreds, 0666); err != nil {
-		panic(err)
-	}
 
-	xKp, xPub, xJwt, err := CreateAccount("X", oKp)
+	xKp, xPub, xSeed, xJwt, err := CreateAccount("X", oKp)
 	if err != nil {
 		panic(err)
 	}
+	_, _, _, xCreds, err := CreateUser("x", xKp)
+	if err != nil {
+		panic(err)
+	}
+
+	// Add Export subjects to X account
 	claim, err := jwt.DecodeAccountClaims(xJwt)
 	if err != nil {
 		panic(err)
@@ -98,17 +76,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "X-account.jwt"), []byte(xJwt), 0666); err != nil {
-		panic(err)
-	}
-	_, _, _, xCreds, err := CreateUser("x", xKp)
-	if err != nil {
-		panic(err)
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "x.creds"), xCreds, 0666); err != nil {
-		panic(err)
-	}
 
+	// Add Import subjects to Admin account from X account
 	claim, err = jwt.DecodeAccountClaims(aJwt)
 	if err != nil {
 		panic(err)
@@ -135,60 +104,31 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "Admin-account.jwt"), []byte(aJwt), 0666); err != nil {
+
+	// Store Operator information
+	if err = StoreAccountInformation(oPub, confs.OpPubKey, oSeed, confs.OperatorSeed, oJwt, confs.OpJwtPath, nil, ""); err != nil {
 		panic(err)
 	}
 
-	//s, err := StartJSServer()
-	//if err != nil {
-	//	panic(err)
-	//}
-	//defer s.Shutdown()
-
-	err = ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`//listen: -1
-jetstream: true
-//jetstream: {max_mem_store: 10Gb, max_file_store: 10Gb}
-host: localhost
-port: 5222
-operator: %s
-resolver: {
-	type: full
-	dir: %s
-}
-//resolver: MEMORY
-resolver_preload: {
-	%s : "%s"
-	%s : "%s"
-	%s : "%s"
-}
-system_account: %s
-websocket: {
-	host: 0.0.0.0
- 	port: 9222
- 	no_tls: true
-}
-`, confs.OpJwtPath, confs.ConfDir, sPub, sJwt, aPub, aJwt, xPub, xJwt, sPub)), 0666)
-	if err != nil {
+	// Store System Account information
+	if err = StoreAccountInformation(sPub, confs.SYSAccountPubKey, sSeed, confs.SYSAccountSeed, sJwt, confs.SYSAccountJwt, sCreds, confs.SysCredFile); err != nil {
 		panic(err)
 	}
 
-	/*
-		var acr natsd.AccountResolver
-		acr, err = natsd.NewDirAccResolver(confs.ConfDir, 0, time.Duration(0), false)
-		if err != nil {
-			panic(err)
-		}
+	// Store Admin Account information
+	if err = StoreAccountInformation(aPub, confs.AdminAccountPubKey, aSeed, confs.AdminAccountSeed, aJwt, confs.AdminAccountJwt, aCreds, confs.AdminCredFile); err != nil {
+		panic(err)
+	}
 
-		if err = acr.Store(sPub, sJwt); err != nil {
-			panic(err)
-		}
-		if err = acr.Store(aPub, aJwt); err != nil {
-			panic(err)
-		}
-		if err = acr.Store(xPub, xJwt); err != nil {
-			panic(err)
-		}
-	*/
+	// Store X Account information
+	if err = StoreAccountInformation(xPub, confs.XAccountPubKey, xSeed, confs.XAccountSeed, xJwt, confs.XAccountJwt, xCreds, confs.XCredFile); err != nil {
+		panic(err)
+	}
+
+	// Store Nats server and account server configuration
+	if err = StoreServerConfiguration(sPub); err != nil {
+		panic(err)
+	}
 
 	log.Println("Everything is okay, I guess")
 }
@@ -257,25 +197,28 @@ func CreateOperator(name string) (nkeys.KeyPair, string, []byte, string, error) 
 	return oKp, oPub, oSeed, oJwt, nil
 }
 
-func CreateAccount(name string, oKp nkeys.KeyPair) (nkeys.KeyPair, string, string, error) {
+func CreateAccount(name string, oKp nkeys.KeyPair) (nkeys.KeyPair, string, []byte, string, error) {
 	aKp, err := nkeys.CreateAccount()
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", nil, "", err
 	}
 	aPub, err := aKp.PublicKey()
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", nil, "", err
 	}
-
+	aSeed, err := aKp.Seed()
+	if err != nil {
+		return nil, "", nil, "", err
+	}
 	claim := jwt.NewAccountClaims(aPub)
 	claim.Name = name
 	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 10, Consumer: 10}
 	aJwt, err := claim.Encode(oKp)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", nil, "", err
 	}
 
-	return aKp, aPub, aJwt, nil
+	return aKp, aPub, aSeed, aJwt, nil
 }
 
 func CreateUser(name string, aKp nkeys.KeyPair) (nkeys.KeyPair, string, string, []byte, error) {
@@ -306,4 +249,70 @@ func CreateUser(name string, aKp nkeys.KeyPair) (nkeys.KeyPair, string, string, 
 	}
 
 	return uKp, uPub, uJwt, uCreds, nil
+}
+
+func StoreAccountInformation(pub, pubPath string, seed []byte, seedPath, jwts, jwtPath string, creds []byte, credFile string) error {
+	if err := ioutil.WriteFile(pubPath, []byte(pub), 0666); err != nil {
+		return err
+	}
+	if err := ioutil.WriteFile(seedPath, seed, 0666); err != nil {
+		return err
+	}
+	if err := ioutil.WriteFile(jwtPath, []byte(jwts), 0666); err != nil {
+		return err
+	}
+	if creds != nil {
+		if err := ioutil.WriteFile(credFile, creds, 0666); err != nil {
+			return err
+
+		}
+	}
+
+	return nil
+}
+
+func StoreServerConfiguration(sPub string) error {
+	/*
+		resolver_preload: {
+			%s : "%s"
+			%s : "%s"
+			%s : "%s"
+		}
+	*/
+	err := ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`jetstream: {max_mem_store: 10Gb, max_file_store: 10Gb, store_dir: %s}
+host: 0.0.0.0
+port: 5222
+operator: %s
+resolver: URL(%s)
+system_account: %s
+websocket: {
+	host: 0.0.0.0
+ 	port: 9222
+ 	no_tls: true
+}
+`, confs.JSStoreDir, confs.OpJwtPath, "http://0.0.0.0:9090/jwt/v1/accounts/", sPub)), 0666)
+	if err != nil {
+		return err
+	}
+
+	err = ioutil.WriteFile(confs.AccountServerConfig, []byte(fmt.Sprintf(`operatorjwtpath: %s
+http {
+    host: 0.0.0.0
+    port: 9090
+}
+store {
+    dir: %s,
+    readonly: false,
+    shard: true
+}
+nats: {
+    servers: ["nats://0.0.0.0:5222"],
+    usercredentials: %s
+}
+`, confs.OpJwtPath, confs.AccServerDir, confs.SysCredFile)), 0666)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

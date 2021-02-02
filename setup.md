@@ -14,10 +14,10 @@
 - server.conf
 
 ```shell
-$ cd /home/tamal/go/src/github.com/appscode/demo-cloudevents/nats
+$ cd $HOME/go/src/github.com/appscode/demo-cloudevents/nats
 
 $ go run accounts/main.go
-Configuration directory:  /home/tamal/go/src/github.com/appscode/demo-cloudevents/nats/confs/ac_store
+Configuration directory:  $HOME/go/src/github.com/appscode/demo-cloudevents/nats/confs/ac_store
 
 SOAN7F2O4UDIXAVNMMVJGTXKJVKCNBNGVMISSJ7DRZWDTPDLUXFOPSMWTM
 2021/01/26 04:48:24 NATS Server with Jetstream started...
@@ -29,19 +29,41 @@ SOAN7F2O4UDIXAVNMMVJGTXKJVKCNBNGVMISSJ7DRZWDTPDLUXFOPSMWTM
   - https://github.com/appscode/gitea/blob/20d793f2a82a9fa4676b52e7d88a7da216f23d18/models/nats_account.go#L28
   - https://github.com/appscode/gitea/blob/20d793f2a82a9fa4676b52e7d88a7da216f23d18/modules/nats/nats_server.go#L46
 
-## Build and Install nats server
+## Install nats server
 
 ```shell
-$ cd /home/tamal/go/src/github.com/nats-io/nats-server
+$ cd $HOME/go/src/github.com/nats-io/nats-server
 $ go install -v ./...
+```
+
+## Install nats account server
+
+```shell
+$ cd $HOME/go/src/github.com/nats-io/nats-account-server
+$ go install -v ./...
+```
+
+## Run nats account server
+
+```shell
+$ cd $HOME/go/src/github.com/appscode/demo-cloudevents/nats
+
+$ nats-account-server -c confs/ac_store/nas.conf
 ```
 
 ## Run nats server
 
 ```shell
-$ cd /home/tamal/go/src/github.com/appscode/demo-cloudevents/nats
+$ cd $HOME/go/src/github.com/appscode/demo-cloudevents/nats
 
 $ nats-server -c confs/ac_store/server.conf
+```
+
+## Push created account server to nats account server
+```shell
+$ cd $HOME/go/src/github.com/appscode/demo-cloudevents/nats
+
+$ go run accounts-push/main.go
 ```
 
 ## Send/Receive Simulations (using nats official sdk)
@@ -50,7 +72,7 @@ $ nats-server -c confs/ac_store/server.conf
 - Admin consumes (receives)
 
 ```shell
-$ cd /home/tamal/go/src/github.com/appscode/demo-cloudevents/nats
+$ cd $HOME/go/src/github.com/appscode/demo-cloudevents/nats
 
 $ go run server/main.go
 2021/01/26 05:16:49 A stream named `ReceivedEvents` has been created
@@ -63,7 +85,7 @@ Events <==> Hello there, at 2021-01-26 05:16:53.413720583 -0800 PST m=+4.0318449
 ## sender / receiver demo (using CloudEvents sdk)
 
 ```shell
-$ cd /home/tamal/go/src/github.com/appscode/demo-cloudevents/nats
+$ cd $HOME/go/src/github.com/appscode/demo-cloudevents/nats
 
 $ go run receiver/main.go
 2021/01/26 05:36:37 Jetstream receiver to `ProcessEvents` started...

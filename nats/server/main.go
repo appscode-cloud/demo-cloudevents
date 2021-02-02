@@ -117,7 +117,7 @@ func ReadMessage(stream, consumer string, mgr *jsm.Manager) error {
 		}
 
 		fmt.Println(msg.Subject, "<==>", string(msg.Data))
-		msg.Ack()
+		msg.Respond([]byte(""))
 	}
 }
 
@@ -130,7 +130,7 @@ func PublishMessage() {
 	for {
 		select {
 		case t := <-ticker.C:
-			if err := nc.Publish("Events", []byte(fmt.Sprintf("Hello there, at %v", t.String()))); err != nil {
+			if err := nc.Publish("Events", []byte(fmt.Sprintf("Hello there, at %v", t.Format(time.RFC1123)))); err != nil {
 			}
 		}
 	}

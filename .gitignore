@@ -1,2 +1,4 @@
 .idea
 nats/confs/ac_store
+nats/confs/nas_store
+nats/confs/jetstream

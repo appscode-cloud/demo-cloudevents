@@ -49,20 +49,21 @@
           // servers: "wss://nats.appscode.ninja:443",
           servers: "ws://localhost:9222",
           authenticator: jwtAuthenticator(
-            "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJSUEFUTFNDVkI0RlZPWE9CVlhMMjNKNE1TTjJEQ1Y0T1hYTTUzUVJaU1Y0Tlc2UFVKRUNBIiwiaWF0IjoxNjExNjY3NzgwLCJpc3MiOiJBQVdST083NVFXTU9NMloyWEpQNDY2NkNMQ0k1Q1VTSDIzSUpQWlVBQUdGVUlTSFJEVUJEVEdKRyIsIm5hbWUiOiJ4Iiwic3ViIjoiVUFGVE5OTDVSNVlOSFZKTEdMQ0VLT05JNUNRV01SWTdaRlZVWkNKWlBaUUhUMjNER0VGMkxCWkgiLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.z92SvSkdGXHaDC-bmU0bCIOc_tqHLZLFKJ_g_L_bTqFw7yLoQ7thgBaIgEQTNvSa62JAiX6YHoJCilz5-hASBg",
-            bytes("SUAPZF3HKKUXQGMIYATBSUMXLOFCQ2XXYZV4MDIOIZIN6ZUO5KKMNXQNCA")
+            "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiI2N1dVUzNPVzIyU1k0S0NRQzdIUEZIQlZQSldNUTVOWDYzVzY3WjNEVkNJMk9KTkZXNENRIiwiaWF0IjoxNjEyMjcyMTA3LCJpc3MiOiJBQVkzTTU0QkJOT0NQRlRXN1FUVkpNSVFYVFVFTUVCQlpYS0FIQTVaN1NTUTRNMlFETU1MSlhQUiIsIm5hbWUiOiJ4Iiwic3ViIjoiVUFaREszTUZFUTVGQVlIVFJaRlVOQlBRRktQWlBHQjQ1SUFaNUFCVlNQWDZJNktYU1FBTEFaQ0wiLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.UkhYS7UR992R2olLnFtcV5ClJjqMCAs_tAob-ERm0kaFODN_CSFWw-E2OdrgVbf8ODisQ71ymARt0KQ0kJlfAg",
+            bytes("SUACTPCRPABLFRJXNHRLUCITVCAPLX52IAWOFGCVS2TSS7JCWRUJIHSOOQ")
           ),
           ws: true,
         });
         addEntry("connected to NATS!");
 
         (async () => {
-          addEntry("listening to channel `Notifications`");
-          const chat = nc.subscribe("Notifications");
+          addEntry("Listening to channel `my.Notifications`");
+          const chat = nc.subscribe("my.Notifications");
           for await (const m of chat) {
             addEntry(`message : ${sc.decode(m.data)}`);
+            m.respond()
           }
-          addEntry("listened to channel `Notifications`");
+          addEntry("Connection to channel `my.Notifications` closed");
         })().then();
 
         // (async () => {
