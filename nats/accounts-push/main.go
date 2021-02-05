@@ -53,7 +53,7 @@ func main() {
 }
 
 func PushAccountToAccountServer(name, jwt string) error {
-	ur, err := url.Parse("http://0.0.0.0:9090/jwt/v1/accounts/")
+	ur, err := url.Parse("http://localhost:9090/jwt/v1/accounts/")
 	if err != nil {
 		return err
 	}

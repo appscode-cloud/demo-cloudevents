@@ -290,7 +290,7 @@ websocket: {
  	port: 9222
  	no_tls: true
 }
-`, confs.JSStoreDir, confs.OpJwtPath, "http://0.0.0.0:9090/jwt/v1/accounts/", sPub)), 0666)
+`, confs.JSStoreDir, confs.OpJwtPath, "http://localhost:9090/jwt/v1/accounts/", sPub)), 0666)
 	if err != nil {
 		return err
 	}
@@ -306,7 +306,7 @@ store {
     shard: true
 }
 nats: {
-    servers: ["nats://0.0.0.0:5222"],
+    servers: ["nats://localhost:5222"],
     usercredentials: %s
 }
 `, confs.OpJwtPath, confs.AccServerDir, confs.SysCredFile)), 0666)
