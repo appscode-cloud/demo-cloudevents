@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -21,7 +22,7 @@ func main() {
 		panic(err)
 	}
 
-	oKp, oPub, oSeed, oJwt, err := CreateOperator("KO")
+	oKp, _, oSeed, oJwt, err := CreateOperator("KO")
 	if err != nil {
 		panic(err)
 	}
@@ -30,16 +31,16 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	_, _, _, sCreds, err := CreateUser("sys", sKp)
+	_, _, suSeed, suJwt, err := CreateUser("sys", sKp)
 	if err != nil {
 		panic(err)
 	}
 
-	aKp, aPub, aSeed, aJwt, err := CreateAccount("Admin", oKp)
+	aKp, _, aSeed, aJwt, err := CreateAccount("Admin", oKp)
 	if err != nil {
 		panic(err)
 	}
-	_, _, _, aCreds, err := CreateUser("admin", aKp)
+	_, _, auSeed, auJwt, err := CreateUser("admin", aKp)
 	if err != nil {
 		panic(err)
 	}
@@ -47,8 +48,9 @@ func main() {
 	xKp, xPub, xSeed, xJwt, err := CreateAccount("X", oKp)
 	if err != nil {
 		panic(err)
+		println(xPub)
 	}
-	_, _, _, xCreds, err := CreateUser("x", xKp)
+	_, _, xuSeed, xuJwt, err := CreateUser("x", xKp)
 	if err != nil {
 		panic(err)
 	}
@@ -60,19 +62,53 @@ func main() {
 	}
 	claim.Exports = jwt.Exports{
 		&jwt.Export{
-			Name:    "Events",
-			Subject: "Events",
+			Name:    "x.Events",
+			Subject: "x.Events",
 			Type:    jwt.Stream,
 		},
 		&jwt.Export{
-			Name:         "Notifications",
-			Subject:      "Notifications",
+			Name:         "x.Notifications",
+			Subject:      "x.Notifications",
 			Type:         jwt.Service,
 			TokenReq:     false,
 			ResponseType: jwt.ResponseTypeStream,
 		},
 	}
 	xJwt, err = claim.Encode(oKp)
+	if err != nil {
+		panic(err)
+	}
+
+	yKp, yPub, ySeed, yJwt, err := CreateAccount("Y", oKp)
+	if err != nil {
+		panic(err)
+		println(yPub)
+	}
+	_, _, yuSeed, yuJwt, err := CreateUser("y", yKp)
+	if err != nil {
+		panic(err)
+	}
+
+	// Add Export subjects to X account
+	claim, err = jwt.DecodeAccountClaims(yJwt)
+	if err != nil {
+		panic(err)
+	}
+	claim.Exports = jwt.Exports{
+		&jwt.Export{
+			Name:    "y.Events",
+			Subject: "y.Events",
+			Type:    jwt.Stream,
+		},
+		&jwt.Export{
+			Name:         "y.Notifications",
+			Subject:      "y.Notifications",
+			Type:         jwt.Service,
+			TokenReq:     false,
+			ResponseType: jwt.ResponseTypeStream,
+		},
+	}
+	yJwt, err = claim.Encode(oKp)
 	if err != nil {
 		panic(err)
 	}
@@ -84,21 +120,37 @@ func main() {
 	}
 	claim.Imports = jwt.Imports{
 		&jwt.Import{
-			Name:    "Events",
-			Subject: "Events",
+			Name:    "x.Events",
+			Subject: "x.Events",
 			Account: xPub,
 			//To:           "user.x",
 			LocalSubject: "user.x.Events",
 			Type:         jwt.Stream,
 		},
 		&jwt.Import{
-			Name:    "Notifications",
-			Subject: "Notifications",
+			Name:    "x.Notifications",
+			Subject: "x.Notifications",
 			Account: xPub,
 			//To:      "Notifications",
 			LocalSubject: "user.x.Notifications",
 			Type:         jwt.Service,
 		},
+		//&jwt.Import{
+		//	Name:    "y.Events",
+		//	Subject: "y.Events",
+		//	Account: yPub,
+		//	//To:           "user.x",
+		//	LocalSubject: "user.y.Events",
+		//	Type:         jwt.Stream,
+		//},
+		//&jwt.Import{
+		//	Name:    "y.Notifications",
+		//	Subject: "y.Notifications",
+		//	Account: yPub,
+		//	//To:      "Notifications",
+		//	LocalSubject: "user.y.Notifications",
+		//	Type:         jwt.Service,
+		//},
 	}
 	aJwt, err = claim.Encode(oKp)
 	if err != nil {
@@ -106,22 +158,39 @@ func main() {
 	}
 
 	// Store Operator information
-	if err = StoreAccountInformation(oPub, confs.OpPubKey, oSeed, confs.OperatorSeed, oJwt, confs.OpJwtPath, nil, ""); err != nil {
+	if err = StoreAccountInformation(oJwt, oSeed, confs.OperatorCreds, confs.OpJwtPath); err != nil {
 		panic(err)
 	}
 
 	// Store System Account information
-	if err = StoreAccountInformation(sPub, confs.SYSAccountPubKey, sSeed, confs.SYSAccountSeed, sJwt, confs.SYSAccountJwt, sCreds, confs.SysCredFile); err != nil {
+	if err = StoreAccountInformation(sJwt, sSeed, confs.SYSAccountCreds, confs.SYSAccountJwt); err != nil {
 		panic(err)
 	}
-
-	// Store Admin Account information
-	if err = StoreAccountInformation(aPub, confs.AdminAccountPubKey, aSeed, confs.AdminAccountSeed, aJwt, confs.AdminAccountJwt, aCreds, confs.AdminCredFile); err != nil {
+	if err = StoreAccountInformation(suJwt, suSeed, confs.SysCredFile, ""); err != nil {
 		panic(err)
 	}
 
 	// Store X Account information
-	if err = StoreAccountInformation(xPub, confs.XAccountPubKey, xSeed, confs.XAccountSeed, xJwt, confs.XAccountJwt, xCreds, confs.XCredFile); err != nil {
+	if err = StoreAccountInformation(xJwt, xSeed, confs.XAccountCreds, confs.XAccountJwt); err != nil {
+		panic(err)
+	}
+	if err = StoreAccountInformation(xuJwt, xuSeed, confs.XCredFile, ""); err != nil {
+		panic(err)
+	}
+
+	// Store Y Account information
+	if err = StoreAccountInformation(yJwt, ySeed, confs.YAccountCreds, confs.YAccountJwt); err != nil {
+		panic(err)
+	}
+	if err = StoreAccountInformation(yuJwt, yuSeed, confs.YCredFile, ""); err != nil {
+		panic(err)
+	}
+
+	// Store Admin Account information
+	if err = StoreAccountInformation(aJwt, aSeed, confs.AdminAccountCreds, confs.AdminAccountJwt); err != nil {
+		panic(err)
+	}
+	if err = StoreAccountInformation(auJwt, auSeed, confs.AdminCredFile, ""); err != nil {
 		panic(err)
 	}
 
@@ -212,7 +281,9 @@ func CreateAccount(name string, oKp nkeys.KeyPair) (nkeys.KeyPair, string, []byt
 	}
 	claim := jwt.NewAccountClaims(aPub)
 	claim.Name = name
-	claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 10, Consumer: 10}
+	if name != "SYS" {
+		claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 10, Consumer: 10}
+	}
 	aJwt, err := claim.Encode(oKp)
 	if err != nil {
 		return nil, "", nil, "", err
@@ -221,19 +292,19 @@ func CreateAccount(name string, oKp nkeys.KeyPair) (nkeys.KeyPair, string, []byt
 	return aKp, aPub, aSeed, aJwt, nil
 }
 
-func CreateUser(name string, aKp nkeys.KeyPair) (nkeys.KeyPair, string, string, []byte, error) {
+func CreateUser(name string, aKp nkeys.KeyPair) (nkeys.KeyPair, string, []byte, string, error) {
 	uKp, err := nkeys.CreateUser()
 	if err != nil {
-		return nil, "", "", nil, err
+		return nil, "", nil, "", err
 	}
 	uSeed, err := uKp.Seed()
 	if err != nil {
-		return nil, "", "", nil, err
+		return nil, "", nil, "", err
 	}
 
 	uPub, err := uKp.PublicKey()
 	if err != nil {
-		return nil, "", "", nil, err
+		return nil, "", nil, "", err
 	}
 
 	uClaim := jwt.NewUserClaims(uPub)
@@ -241,30 +312,25 @@ func CreateUser(name string, aKp nkeys.KeyPair) (nkeys.KeyPair, string, string, 
 
 	uJwt, err := uClaim.Encode(aKp)
 	if err != nil {
-		return nil, "", "", nil, err
-	}
-	uCreds, err := jwt.FormatUserConfig(uJwt, uSeed)
-	if err != nil {
-		return nil, "", "", nil, err
+		return nil, "", nil, "", err
 	}
 
-	return uKp, uPub, uJwt, uCreds, nil
+	return uKp, uPub, uSeed, uJwt, nil
 }
 
-func StoreAccountInformation(pub, pubPath string, seed []byte, seedPath, jwts, jwtPath string, creds []byte, credFile string) error {
-	if err := ioutil.WriteFile(pubPath, []byte(pub), 0666); err != nil {
+func StoreAccountInformation(jwts string, seed []byte, credFile, jwtFile string) error {
+	creds, err := FormatCredentialConfig(jwts, seed)
+	if err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(seedPath, seed, 0666); err != nil {
-		return err
-	}
-	if err := ioutil.WriteFile(jwtPath, []byte(jwts), 0666); err != nil {
-		return err
-	}
-	if creds != nil {
-		if err := ioutil.WriteFile(credFile, creds, 0666); err != nil {
-			return err
 
+	if err := ioutil.WriteFile(credFile, creds, 0666); err != nil {
+		return err
+	}
+
+	if len(jwtFile) > 0 {
+		if err := ioutil.WriteFile(jwtFile, []byte(jwts), 0666); err != nil {
+			return err
 		}
 	}
 
@@ -315,4 +381,28 @@ nats: {
 	}
 
 	return nil
+}
+
+// FormatCredentialConfig returns a decorated file with a decorated JWT and decorated seed
+func FormatCredentialConfig(jwtString string, seed []byte) ([]byte, error) {
+	w := bytes.NewBuffer(nil)
+	jd, err := jwt.DecorateJWT(jwtString)
+	if err != nil {
+		return nil, err
+	}
+	_, err = w.Write(jd)
+	if err != nil {
+		return nil, err
+	}
+
+	d, err := jwt.DecorateSeed(seed)
+	if err != nil {
+		return nil, err
+	}
+	_, err = w.Write(d)
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
 }

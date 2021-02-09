@@ -31,14 +31,14 @@ func main() {
 		panic(err)
 	}
 
-	stream, err := AddStream("Notifications", "Notifications", mgr)
+	stream, err := AddStream("Notifications", "x.Notifications", mgr)
 	if err != nil {
 		panic(err)
 	}
 
 	log.Printf("A stream named `%s` has been created", stream.Name())
 
-	consumer, err := AddPushConsumer("Notifications", "Notifications", stream.Name(), mgr)
+	consumer, err := AddPushConsumer("Notifications", "x.Notifications", stream.Name(), mgr)
 	if err != nil {
 		panic(err)
 	}
@@ -55,7 +55,7 @@ func main() {
 	//fmt.Println("Populating pull consumer")
 	//time.Sleep(4 * time.Second)
 
-	ReadMessage("my.Notifications", nc)
+	ReadMessage("my.x.Notifications", nc)
 }
 
 func StartJSServer() (*natsd.Server, *nats.Conn, error) {
