@@ -135,22 +135,22 @@ func main() {
 			LocalSubject: "user.x.Notifications",
 			Type:         jwt.Service,
 		},
-		//&jwt.Import{
-		//	Name:    "y.Events",
-		//	Subject: "y.Events",
-		//	Account: yPub,
-		//	//To:           "user.x",
-		//	LocalSubject: "user.y.Events",
-		//	Type:         jwt.Stream,
-		//},
-		//&jwt.Import{
-		//	Name:    "y.Notifications",
-		//	Subject: "y.Notifications",
-		//	Account: yPub,
-		//	//To:      "Notifications",
-		//	LocalSubject: "user.y.Notifications",
-		//	Type:         jwt.Service,
-		//},
+		&jwt.Import{
+			Name:    "y.Events",
+			Subject: "y.Events",
+			Account: yPub,
+			//To:           "user.x",
+			LocalSubject: "user.y.Events",
+			Type:         jwt.Stream,
+		},
+		&jwt.Import{
+			Name:    "y.Notifications",
+			Subject: "y.Notifications",
+			Account: yPub,
+			//To:      "Notifications",
+			LocalSubject: "user.y.Notifications",
+			Type:         jwt.Service,
+		},
 	}
 	aJwt, err = claim.Encode(oKp)
 	if err != nil {

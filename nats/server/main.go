@@ -130,7 +130,7 @@ func PublishMessage() {
 	for {
 		select {
 		case t := <-ticker.C:
-			if err := nc.Publish("Events", []byte(fmt.Sprintf("Hello there, at %v", t.Format(time.RFC1123)))); err != nil {
+			if err := nc.Publish("x.Events", []byte(fmt.Sprintf("Hello there, at %v", t.Format(time.RFC1123)))); err != nil {
 			}
 		}
 	}

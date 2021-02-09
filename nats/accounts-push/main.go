@@ -53,6 +53,19 @@ func main() {
 	if err := PushAccountToAccountServer(claim.Subject, string(xJwt)); err != nil {
 		panic(err)
 	}
+
+	// Push x account information to account server
+	yJwt, err := ioutil.ReadFile(confs.YAccountJwt)
+	if err != nil {
+		panic(err)
+	}
+	claim, err = jwt.DecodeAccountClaims(string(yJwt))
+	if err != nil {
+		panic(err)
+	}
+	if err := PushAccountToAccountServer(claim.Subject, string(yJwt)); err != nil {
+		panic(err)
+	}
 }
 
 func PushAccountToAccountServer(name, jwt string) error {

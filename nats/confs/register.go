@@ -26,9 +26,9 @@ var (
 	XAccountJwt   = filepath.Join(ConfDir, "X.jwt")
 	XCredFile     = filepath.Join(ConfDir, "x.creds")
 
-	YAccountCreds = filepath.Join(ConfDir, "X_account.creds")
-	YAccountJwt   = filepath.Join(ConfDir, "X.jwt")
-	YCredFile     = filepath.Join(ConfDir, "x.creds")
+	YAccountCreds = filepath.Join(ConfDir, "Y_account.creds")
+	YAccountJwt   = filepath.Join(ConfDir, "Y.jwt")
+	YCredFile     = filepath.Join(ConfDir, "Y.creds")
 
 	ServerConfigFile    = filepath.Join(ConfDir, "server.conf")
 	AccountServerConfig = filepath.Join(ConfDir, "nas.conf")
