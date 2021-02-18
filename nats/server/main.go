@@ -44,6 +44,9 @@ func main() {
 	}
 	log.Printf("A consumer named `%s` has been created", consumer.Name())
 
+	// TODO: remove it
+	return
+
 	go PublishMessage()
 
 	if err = ReadMessage(stream.Name(), consumer.Name(), mgr); err != nil {

@@ -118,40 +118,40 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	claim.Imports = jwt.Imports{
-		&jwt.Import{
-			Name:    "x.Events",
-			Subject: "x.Events",
-			Account: xPub,
-			//To:           "user.x",
-			LocalSubject: "user.x.Events",
-			Type:         jwt.Stream,
-		},
-		&jwt.Import{
-			Name:    "x.Notifications",
-			Subject: "x.Notifications",
-			Account: xPub,
-			//To:      "Notifications",
-			LocalSubject: "user.x.Notifications",
-			Type:         jwt.Service,
-		},
-		&jwt.Import{
-			Name:    "y.Events",
-			Subject: "y.Events",
-			Account: yPub,
-			//To:           "user.x",
-			LocalSubject: "user.y.Events",
-			Type:         jwt.Stream,
-		},
-		&jwt.Import{
-			Name:    "y.Notifications",
-			Subject: "y.Notifications",
-			Account: yPub,
-			//To:      "Notifications",
-			LocalSubject: "user.y.Notifications",
-			Type:         jwt.Service,
-		},
-	}
+	//claim.Imports = jwt.Imports{
+	//	&jwt.Import{
+	//		Name:    "x.Events",
+	//		Subject: "x.Events",
+	//		Account: xPub,
+	//		//To:           "user.x",
+	//		LocalSubject: "user.x.Events",
+	//		Type:         jwt.Stream,
+	//	},
+	//	&jwt.Import{
+	//		Name:    "x.Notifications",
+	//		Subject: "x.Notifications",
+	//		Account: xPub,
+	//		//To:      "Notifications",
+	//		LocalSubject: "user.x.Notifications",
+	//		Type:         jwt.Service,
+	//	},
+	//	&jwt.Import{
+	//		Name:    "y.Events",
+	//		Subject: "y.Events",
+	//		Account: yPub,
+	//		//To:           "user.x",
+	//		LocalSubject: "user.y.Events",
+	//		Type:         jwt.Stream,
+	//	},
+	//	&jwt.Import{
+	//		Name:    "y.Notifications",
+	//		Subject: "y.Notifications",
+	//		Account: yPub,
+	//		//To:      "Notifications",
+	//		LocalSubject: "user.y.Notifications",
+	//		Type:         jwt.Service,
+	//	},
+	//}
 	aJwt, err = claim.Encode(oKp)
 	if err != nil {
 		panic(err)
@@ -282,7 +282,7 @@ func CreateAccount(name string, oKp nkeys.KeyPair) (nkeys.KeyPair, string, []byt
 	claim := jwt.NewAccountClaims(aPub)
 	claim.Name = name
 	if name != "SYS" {
-		claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: 4096 * 1024, DiskStorage: 8192 * 1024, Streams: 10, Consumer: 10}
+		claim.Limits.JetStreamLimits = jwt.JetStreamLimits{MemoryStorage: -1, DiskStorage: -1, Streams: -1, Consumer: -1}
 	}
 	aJwt, err := claim.Encode(oKp)
 	if err != nil {
