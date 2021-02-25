@@ -1,4 +1,4 @@
-module github.com/masudur-rahman/demo-cloudevents
+module github.com/appscodelabs/demo-cloudevents
 
 go 1.14
 
