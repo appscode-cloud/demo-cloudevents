@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
@@ -163,6 +164,10 @@ func main() {
 	}
 
 	// Store System Account information
+
+	if err := ioutil.WriteFile(filepath.Join(confs.ConfDir, "SYS.pub"), []byte(sPub), 0666); err != nil {
+		panic(err)
+	}
 	if err = StoreAccountInformation(sJwt, sSeed, confs.SYSAccountCreds, confs.SYSAccountJwt); err != nil {
 		panic(err)
 	}
