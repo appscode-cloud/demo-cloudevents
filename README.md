@@ -1,5 +1,7 @@
 # `Classic Nats`, `Jetstream` and `Websocket`
 
+**Design:** https://github.com/appscode/nats-design
+
 ## Classic `NATS` Server
 
 - **Run `nats-account-server`**
