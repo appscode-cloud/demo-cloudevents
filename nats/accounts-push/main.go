@@ -10,7 +10,7 @@ import (
 
 	"github.com/nats-io/jwt/v2"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 )
 
 func main() {

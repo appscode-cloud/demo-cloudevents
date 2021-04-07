@@ -13,7 +13,7 @@ import (
 
 	"github.com/nats-io/nkeys"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/v2/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/v2/confs"
 	"github.com/nats-io/jwt"
 	natsd "github.com/nats-io/nats-server/v2/server"
 )

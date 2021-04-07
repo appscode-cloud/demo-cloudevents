@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 	natsio "github.com/nats-io/nats.go"
 
 	"github.com/cloudevents/sdk-go/protocol/nats/v2"
@@ -21,7 +21,7 @@ type Example struct {
 
 func main() {
 	sender, err := nats.NewSender("nats://localhost:5222", "Events",
-		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "x.creds"))))
+		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir(), "x.creds"))))
 	if err != nil {
 		panic(err)
 	}

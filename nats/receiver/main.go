@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 	natsio "github.com/nats-io/nats.go"
 
 	"github.com/cloudevents/sdk-go/protocol/nats/v2"
@@ -57,7 +57,7 @@ func processEvents(ctx context.Context, event cloudevents.Event) error {
 
 func SendNotificationToNatsServer(subject string, data interface{}) error {
 	sender, err := nats.NewSender("nats://localhost:4222", subject,
-		nats.NatsOptions(natsio.UserCredentials("/home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats-v2/confs/admin.creds")))
+		nats.NatsOptions(natsio.UserCredentials("/home/masud/go/src/github.com/appscodelabs/demo-cloudevents/nats-v2/confs/admin.creds")))
 	if err != nil {
 		return err
 	}

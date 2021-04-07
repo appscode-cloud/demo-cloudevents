@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/v2/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/v2/confs"
 
 	"github.com/nats-io/jwt"
 	"github.com/nats-io/nkeys"

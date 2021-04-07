@@ -12,7 +12,7 @@ import (
 	natsd "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 )
 
 func main() {
@@ -22,7 +22,7 @@ func main() {
 	//}
 	//defer s.Shutdown()
 	//fmt.Println(s.ClientURL())
-	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds")))
+	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir(), "admin.creds")))
 	if err != nil {
 		panic(err)
 	}
@@ -117,6 +117,8 @@ func ReadMessage(stream, consumer string, mgr *jsm.Manager) error {
 			continue
 		} else if err != nil {
 			// log error and notify via email
+			log.Println(err.Error())
+			continue
 		}
 
 		fmt.Println(msg.Subject, "<==>", string(msg.Data))
@@ -125,7 +127,7 @@ func ReadMessage(stream, consumer string, mgr *jsm.Manager) error {
 }
 
 func PublishMessage() {
-	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir, "x.creds")))
+	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir(), "x.creds")))
 	if err != nil {
 		panic(err)
 	}

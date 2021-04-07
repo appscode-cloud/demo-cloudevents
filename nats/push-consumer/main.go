@@ -11,7 +11,7 @@ import (
 	natsd "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 	//}
 	//defer s.Shutdown()
 	//fmt.Println(s.ClientURL())
-	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir, "x.creds")))
+	nc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir(), "x.creds")))
 	if err != nil {
 		panic(err)
 	}
@@ -45,7 +45,7 @@ func main() {
 
 	log.Printf("A consumer named `%s` has been created", consumer.Name())
 
-	adminnc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds")))
+	adminnc, err := nats.Connect("nats://localhost:5222", nats.UserCredentials(filepath.Join(confs.ConfDir(), "admin.creds")))
 	if err != nil {
 		panic(err)
 	}

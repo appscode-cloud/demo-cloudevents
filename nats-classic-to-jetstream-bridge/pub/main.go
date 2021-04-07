@@ -5,7 +5,7 @@ import (
 	"log"
 	"path/filepath"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/v2/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/v2/confs"
 	"github.com/nats-io/nats.go"
 )
 

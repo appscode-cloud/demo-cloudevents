@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -10,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 
 	"github.com/nats-io/jwt/v2"
 	natsd "github.com/nats-io/nats-server/v2/server"
@@ -18,8 +19,16 @@ import (
 )
 
 func main() {
-	println("Configuration directory: ", confs.ConfDir, "\n")
-	if err := os.MkdirAll(confs.ConfDir, os.ModePerm); err != nil {
+	flag.StringVar(&confs.ConfsDir, "confs", "", "entire configuration directory")
+	flag.StringVar(&confs.AcServerDir, "ac", "", "account server directory")
+	flag.StringVar(&confs.JsStoreDir, "js", "", "jetstream storage directory")
+	flag.Parse()
+
+	confs.UpdateCredentialPaths()
+
+	println("Configuration directory: ", confs.ConfDir(), "\n")
+
+	if err := os.MkdirAll(confs.ConfDir(), os.ModePerm); err != nil {
 		panic(err)
 	}
 
@@ -165,7 +174,7 @@ func main() {
 
 	// Store System Account information
 
-	if err := ioutil.WriteFile(filepath.Join(confs.ConfDir, "SYS.pub"), []byte(sPub), 0666); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(confs.ConfDir(), "SYS.pub"), []byte(sPub), 0666); err != nil {
 		panic(err)
 	}
 	if err = StoreAccountInformation(sJwt, sSeed, confs.SYSAccountCreds, confs.SYSAccountJwt); err != nil {

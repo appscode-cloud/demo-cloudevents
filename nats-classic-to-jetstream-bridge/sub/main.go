@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/v2/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/v2/confs"
 
 	cnats "github.com/cloudevents/sdk-go/protocol/nats/v2"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -39,7 +39,7 @@ func main() {
 
 func SendMessageToJetStreamServer(subject string, msgByte []byte) error {
 	sender, err := cnats.NewSender("nats://localhost:5222", subject,
-		cnats.NatsOptions(nats.UserCredentials("/home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats/confs/admin.creds")))
+		cnats.NatsOptions(nats.UserCredentials("/home/masud/go/src/github.com/appscodelabs/demo-cloudevents/nats/confs/admin.creds")))
 	if err != nil {
 		panic(err)
 	}
@@ -69,6 +69,6 @@ func SendMessageToJetStreamServer(subject string, msgByte []byte) error {
 	} else {
 		log.Printf("sent: %d, accepted: %t", 1, cloudevents.IsACK(result))
 	}
-	log.Printf("Message sent to %s at %s using cred %s", subject, "nats://localhost:5222", "/home/masud/go/src/github.com/masudur-rahman/demo-cloudevents/nats/confs/a.creds")
+	log.Printf("Message sent to %s at %s using cred %s", subject, "nats://localhost:5222", "/home/masud/go/src/github.com/appscodelabs/demo-cloudevents/nats/confs/a.creds")
 	return nil
 }

@@ -1,4 +1,4 @@
-module github.com/masudur-rahman/demo-cloudevents/nats/v2
+module github.com/appscodelabs/demo-cloudevents/nats/v2
 
 go 1.14
 

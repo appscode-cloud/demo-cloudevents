@@ -10,7 +10,7 @@ import (
 	natsd "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 )
 
 func main() {
@@ -55,7 +55,7 @@ func StartJSServer() (*natsd.Server, error) {
 }
 
 func ReadMessage(url, credFile, subject string) {
-	nc, err := nats.Connect(url, nats.UserCredentials(filepath.Join(confs.ConfDir, credFile)))
+	nc, err := nats.Connect(url, nats.UserCredentials(filepath.Join(confs.ConfDir(), credFile)))
 	if err != nil {
 		panic(err)
 	}
@@ -73,7 +73,7 @@ func ReadMessage(url, credFile, subject string) {
 }
 
 func PublishMessage(url, credFile, subject string) {
-	nc, err := nats.Connect(url, nats.UserCredentials(filepath.Join(confs.ConfDir, credFile)))
+	nc, err := nats.Connect(url, nats.UserCredentials(filepath.Join(confs.ConfDir(), credFile)))
 	if err != nil {
 		panic(err)
 	}

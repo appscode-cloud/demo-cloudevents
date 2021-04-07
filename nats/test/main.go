@@ -14,7 +14,7 @@ import (
 
 	natsd "github.com/nats-io/nats-server/v2/server"
 
-	"github.com/masudur-rahman/demo-cloudevents/nats/confs"
+	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 
 	"github.com/nats-io/nkeys"
 )
