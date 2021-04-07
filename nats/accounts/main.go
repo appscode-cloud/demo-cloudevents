@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	demo_cloudevents "github.com/appscodelabs/demo-cloudevents"
 	"github.com/appscodelabs/demo-cloudevents/nats/confs"
 
 	"github.com/nats-io/jwt/v2"
@@ -210,6 +212,10 @@ func main() {
 
 	// Store Nats server and account server configuration
 	if err = StoreServerConfiguration(sPub); err != nil {
+		panic(err)
+	}
+
+	if err = CreateNatsYAMLs(sPub); err != nil {
 		panic(err)
 	}
 
@@ -419,4 +425,81 @@ func FormatCredentialConfig(jwtString string, seed []byte) ([]byte, error) {
 	}
 
 	return w.Bytes(), nil
+}
+
+func CreateNatsYAMLs(SysPub string) error {
+	opCreds, err := ioutil.ReadFile(filepath.Join(confs.OperatorCreds))
+	if err != nil {
+		return err
+	}
+	opJwt, err := ioutil.ReadFile(filepath.Join(confs.OpJwtPath))
+	if err != nil {
+		return err
+	}
+	SysCreds, err := ioutil.ReadFile(filepath.Join(confs.SYSAccountCreds))
+	if err != nil {
+		return err
+	}
+	SysJwt, err := ioutil.ReadFile(filepath.Join(confs.SYSAccountJwt))
+	if err != nil {
+		return err
+	}
+	sysCreds, err := ioutil.ReadFile(filepath.Join(confs.SysCredFile))
+	if err != nil {
+		return err
+	}
+	AdminCreds, err := ioutil.ReadFile(filepath.Join(confs.AdminAccountCreds))
+	if err != nil {
+		return err
+	}
+	adminCreds, err := ioutil.ReadFile(filepath.Join(confs.AdminCredFile))
+	if err != nil {
+		return err
+	}
+
+	data, err := ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/creds.yaml"))
+	if err != nil {
+		return err
+	}
+	enc := base64.StdEncoding.EncodeToString
+	creds := fmt.Sprintf(string(data),
+		enc(opCreds),
+		enc(opJwt),
+		enc(SysCreds),
+		enc(SysJwt),
+		enc(sysCreds),
+		enc(AdminCreds),
+		enc(adminCreds),
+	)
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "creds.yaml"), []byte(creds), os.ModePerm); err != nil {
+		return err
+	}
+
+	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/nats-conf.yaml"))
+	if err != nil {
+		return err
+	}
+
+	conf := fmt.Sprintf(string(data), enc([]byte(SysPub)))
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "nats-conf.yaml"), []byte(conf), os.ModePerm); err != nil {
+		return err
+	}
+
+	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/account-server.yaml"))
+	if err != nil {
+		return err
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "account-server.yaml"), data, os.ModePerm); err != nil {
+		return err
+	}
+
+	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/server.yaml"))
+	if err != nil {
+		return err
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "server.yaml"), data, os.ModePerm); err != nil {
+		return err
+	}
+
+	return nil
 }
