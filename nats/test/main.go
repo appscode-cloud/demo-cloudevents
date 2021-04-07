@@ -59,7 +59,7 @@ func main() {
 	sysKp.Seed()
 	sCreds, err := jwt.FormatUserConfig(sysUserJwt, sysUSeed)
 	handleError(err)
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir, "test.creds"), []byte(sCreds), 0666); err != nil {
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "test.creds"), []byte(sCreds), 0666); err != nil {
 		panic(err)
 	}
 
@@ -71,7 +71,7 @@ resolver: {
 	dir: %s
 }
 system_account: %s
-`, ojwt, confs.ConfDir, sysPub)), 0666)
+`, ojwt, confs.ConfDir(), sysPub)), 0666)
 	opts, err := natsd.ProcessConfigFile(confs.ServerConfigFile)
 	handleError(err)
 	s, err := natsd.NewServer(opts)
@@ -81,9 +81,9 @@ system_account: %s
 		handleError(errors.New("nats server didn't start"))
 	}
 	defer s.Shutdown()
-	_, err = nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir, "test.creds")))
+	_, err = nats.Connect(s.ClientURL(), nats.UserCredentials(filepath.Join(confs.ConfDir(), "test.creds")))
 	handleError(err)
-	//updateJwt(s.ClientURL(), filepath.Join(confs.ConfDir, "test.creds"), sysPub, sysJwt)
+	//updateJwt(s.ClientURL(), filepath.Join(confs.ConfDir(), "test.creds"), sysPub, sysJwt)
 }
 
 const accUpdateEventSubj = "$SYS.ACCOUNT.%s.CLAIMS.UPDATE"

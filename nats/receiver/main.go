@@ -16,7 +16,7 @@ import (
 
 func main() {
 	con, err := nats.NewConsumer("nats://localhost:5222", "ProcessEvents",
-		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir, "admin.creds"))), nats.WithPullConsumer("ReceivedEvents"))
+		nats.NatsOptions(natsio.UserCredentials(filepath.Join(confs.ConfDir(), "admin.creds"))), nats.WithPullConsumer("ReceivedEvents"))
 	if err != nil {
 		panic(err)
 	}
