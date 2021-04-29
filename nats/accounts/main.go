@@ -179,6 +179,9 @@ func main() {
 	if err := ioutil.WriteFile(filepath.Join(confs.ConfDir(), "SYS.pub"), []byte(sPub), 0666); err != nil {
 		panic(err)
 	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "SYS.pub")+".enc", []byte(base64.StdEncoding.EncodeToString([]byte(sPub))), 0666); err != nil {
+		panic(err)
+	}
 	if err = StoreAccountInformation(sJwt, sSeed, confs.SYSAccountCreds, confs.SYSAccountJwt); err != nil {
 		panic(err)
 	}
@@ -344,12 +347,19 @@ func StoreAccountInformation(jwts string, seed []byte, credFile, jwtFile string)
 		return err
 	}
 
-	if err := ioutil.WriteFile(credFile, creds, 0666); err != nil {
+	if err = ioutil.WriteFile(credFile, creds, 0666); err != nil {
+		return err
+	}
+
+	if err = ioutil.WriteFile(credFile+".enc", []byte(base64.StdEncoding.EncodeToString(creds)), 0666); err != nil {
 		return err
 	}
 
 	if len(jwtFile) > 0 {
 		if err := ioutil.WriteFile(jwtFile, []byte(jwts), 0666); err != nil {
+			return err
+		}
+		if err = ioutil.WriteFile(jwtFile+".enc", []byte(base64.StdEncoding.EncodeToString([]byte(jwts))), 0666); err != nil {
 			return err
 		}
 	}

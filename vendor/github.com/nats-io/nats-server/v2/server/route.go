@@ -832,7 +832,7 @@ func (s *Server) forwardNewRouteInfoToKnownServers(info *Info) {
 func (c *client) canImport(subject string) bool {
 	// Use pubAllowed() since this checks Publish permissions which
 	// is what Import maps to.
-	return c.pubAllowedFullCheck(subject, false)
+	return c.pubAllowedFullCheck(subject, false, true)
 }
 
 // canExport is whether or not we will accept a SUB from the remote for a given subject.
@@ -891,7 +891,8 @@ func (c *client) removeRemoteSubs() {
 		ase := as[accountName]
 		if ase == nil {
 			if v, ok := srv.accounts.Load(accountName); ok {
-				as[accountName] = &asubs{acc: v.(*Account), subs: []*subscription{sub}}
+				ase = &asubs{acc: v.(*Account), subs: []*subscription{sub}}
+				as[accountName] = ase
 			} else {
 				continue
 			}
@@ -901,6 +902,7 @@ func (c *client) removeRemoteSubs() {
 		if srv.gateway.enabled {
 			srv.gatewayUpdateSubInterest(accountName, sub, -1)
 		}
+		srv.updateLeafNodes(ase.acc, sub, -1)
 	}
 
 	// Now remove the subs by batch for each account sublist.
@@ -1077,9 +1079,9 @@ func (c *client) processRemoteSub(argo []byte, hasOrigin bool) (err error) {
 	// We store local subs by account and subject and optionally queue name.
 	// If we have a queue it will have a trailing weight which we do not want.
 	if sub.queue != nil {
-		sub.sid = arg[:len(arg)-len(args[3+off])-1]
+		sub.sid = arg[len(sub.origin)+off : len(arg)-len(args[3+off])-1]
 	} else {
-		sub.sid = arg
+		sub.sid = arg[len(sub.origin)+off:]
 	}
 	key := string(sub.sid)
 
@@ -1416,7 +1418,7 @@ func (s *Server) addRoute(c *client, info *Info) (bool, bool) {
 	if !exists {
 		s.routes[c.cid] = c
 		s.remotes[id] = c
-		s.nodeToName[c.route.hash] = c.route.remoteName
+		s.nodeToInfo.Store(c.route.hash, nodeInfo{c.route.remoteName, s.info.Cluster, id, false, info.JetStream})
 		c.mu.Lock()
 		c.route.connectURLs = info.ClientConnectURLs
 		c.route.wsConnURLs = info.WSConnectURLs
@@ -1493,6 +1495,10 @@ func (s *Server) updateRouteSubscriptionMap(acc *Account, sub *subscription, del
 
 	// We only store state on local subs for transmission across all other routes.
 	if sub.client == nil || sub.client.kind == ROUTER || sub.client.kind == GATEWAY {
+		return
+	}
+
+	if sub.si {
 		return
 	}
 
@@ -1647,6 +1653,7 @@ func (s *Server) startRouteAcceptLoop() {
 
 	hp := net.JoinHostPort(opts.Cluster.Host, strconv.Itoa(port))
 	l, e := natsListen("tcp", hp)
+	s.routeListenerErr = e
 	if e != nil {
 		s.mu.Unlock()
 		s.Fatalf("Error listening on router port: %d - %v", opts.Cluster.Port, e)
@@ -1917,6 +1924,7 @@ func (c *client) processRouteConnect(srv *Server, arg []byte, lang string) error
 		return ErrWrongGateway
 	}
 	var perms *RoutePermissions
+	//TODO this check indicates srv may be nil. see srv usage below
 	if srv != nil {
 		perms = srv.getOpts().Cluster.Permissions
 	}
@@ -1939,7 +1947,7 @@ func (c *client) processRouteConnect(srv *Server, arg []byte, lang string) error
 			}
 		}
 		if shouldReject {
-			errTxt := fmt.Sprintf("Rejecting connection, cluster name %q does not match %q", proto.Cluster, srv.info.Cluster)
+			errTxt := fmt.Sprintf("Rejecting connection, cluster name %q does not match %q", proto.Cluster, clusterName)
 			c.Errorf(errTxt)
 			c.sendErr(errTxt)
 			c.closeConnection(ClusterNameConflict)

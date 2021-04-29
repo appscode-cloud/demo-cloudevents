@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -133,6 +134,17 @@ func validateLeafNode(o *Options) error {
 	if err := validateLeafNodeAuthOptions(o); err != nil {
 		return err
 	}
+
+	for _, rem := range o.LeafNode.Remotes {
+		if rem.NoRandomize {
+			continue
+		}
+
+		rand.Shuffle(len(rem.URLs), func(i, j int) {
+			rem.URLs[i], rem.URLs[j] = rem.URLs[j], rem.URLs[i]
+		})
+	}
+
 	// In local config mode, check that leafnode configuration refers to accounts that exist.
 	if len(o.TrustedOperators) == 0 {
 		accNames := map[string]struct{}{}
@@ -460,6 +472,7 @@ func (s *Server) startLeafNodeAcceptLoop() {
 	}
 	hp := net.JoinHostPort(opts.LeafNode.Host, strconv.Itoa(port))
 	l, e := natsListen("tcp", hp)
+	s.leafNodeListenerErr = e
 	if e != nil {
 		s.mu.Unlock()
 		s.Fatalf("Error listening on leafnode port: %d - %v", opts.LeafNode.Port, e)
@@ -472,17 +485,18 @@ func (s *Server) startLeafNodeAcceptLoop() {
 	tlsRequired := opts.LeafNode.TLSConfig != nil
 	tlsVerify := tlsRequired && opts.LeafNode.TLSConfig.ClientAuth == tls.RequireAndVerifyClientCert
 	info := Info{
-		ID:           s.info.ID,
-		Name:         s.info.Name,
-		Version:      s.info.Version,
-		GitCommit:    gitCommit,
-		GoVersion:    runtime.Version(),
-		AuthRequired: true,
-		TLSRequired:  tlsRequired,
-		TLSVerify:    tlsVerify,
-		MaxPayload:   s.info.MaxPayload, // TODO(dlc) - Allow override?
-		Headers:      s.supportsHeaders(),
-		Proto:        1, // Fixed for now.
+		ID:            s.info.ID,
+		Name:          s.info.Name,
+		Version:       s.info.Version,
+		GitCommit:     gitCommit,
+		GoVersion:     runtime.Version(),
+		AuthRequired:  true,
+		TLSRequired:   tlsRequired,
+		TLSVerify:     tlsVerify,
+		MaxPayload:    s.info.MaxPayload, // TODO(dlc) - Allow override?
+		Headers:       s.supportsHeaders(),
+		Proto:         1, // Fixed for now.
+		InfoOnConnect: true,
 	}
 	// If we have selected a random port...
 	if port == 0 {
@@ -539,6 +553,7 @@ func (c *client) sendLeafConnect(clusterName string, tlsRequired, headers bool) 
 		Hub:     c.leaf.remote.Hub,
 		Cluster: clusterName,
 		Headers: headers,
+		DenyPub: c.leaf.remote.DenyImports,
 	}
 
 	// Check for credentials first, that will take precedence..
@@ -662,7 +677,7 @@ func (s *Server) createLeafNode(conn net.Conn, rURL *url.URL, remote *leafNodeCf
 	if maxSubs == 0 {
 		maxSubs = -1
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 
 	c := &client{srv: s, nc: conn, kind: LEAF, opts: defaultOpts, mpay: maxPay, msubs: maxSubs, start: now, last: now}
 	// Do not update the smap here, we need to do it in initLeafNodeSmapAndSendSubs
@@ -795,9 +810,6 @@ func (s *Server) createLeafNode(conn net.Conn, rURL *url.URL, remote *leafNodeCf
 		// Leaf nodes will always require a CONNECT to let us know
 		// when we are properly bound to an account.
 		c.setAuthTimer(secondsToDuration(opts.LeafNode.AuthTimeout))
-
-		// Set the Ping timer
-		s.setFirstPingTimer(c)
 	}
 
 	// Keep track in case server is shutdown before we can successfully register.
@@ -905,7 +917,7 @@ func (c *client) processLeafnodeInfo(info *Info) {
 		c.setPermissions(perms)
 	}
 
-	var finishConnect bool
+	var resumeConnect bool
 	var s *Server
 
 	// If this is a remote connection and this is the first INFO protocol,
@@ -913,12 +925,19 @@ func (c *client) processLeafnodeInfo(info *Info) {
 	if firstINFO && c.leaf.remote != nil {
 		// Clear deadline that was set in createLeafNode while waiting for the INFO.
 		c.nc.SetDeadline(time.Time{})
-		finishConnect = true
-		s = c.srv
+		resumeConnect = true
 	}
+	s = c.srv
 	c.mu.Unlock()
 
-	if finishConnect && s != nil {
+	finishConnect := info.ConnectInfo
+	if resumeConnect && s != nil {
+		s.leafNodeResumeConnectProcess(c)
+		if !info.InfoOnConnect {
+			finishConnect = true
+		}
+	}
+	if finishConnect {
 		s.leafNodeFinishConnectProcess(c)
 	}
 }
@@ -1087,9 +1106,9 @@ type leafConnectInfo struct {
 	Hub     bool   `json:"is_hub,omitempty"`
 	Cluster string `json:"cluster,omitempty"`
 	Headers bool   `json:"headers,omitempty"`
-
 	// Just used to detect wrong connection attempts.
-	Gateway string `json:"gateway,omitempty"`
+	Gateway string   `json:"gateway,omitempty"`
+	DenyPub []string `json:"deny_pub,omitempty"`
 }
 
 // processLeafNodeConnect will process the inbound connect args.
@@ -1145,6 +1164,13 @@ func (c *client) processLeafNodeConnect(s *Server, arg []byte, lang string) erro
 	if proto.Cluster != "" {
 		c.leaf.remoteCluster = proto.Cluster
 	}
+
+	// Set the Ping timer
+	s.setFirstPingTimer(c)
+
+	// If we received pub deny permissions from the other end, merge with existing ones.
+	c.mergePubDenyPermissions(proto.DenyPub)
+
 	c.mu.Unlock()
 
 	// Add in the leafnode here since we passed through auth at this point.
@@ -1176,15 +1202,13 @@ func (c *client) remoteCluster() string {
 // Sends back an info block to the soliciting leafnode to let it know about
 // its permission settings for local enforcement.
 func (s *Server) sendPermsInfo(c *client) {
-	if c.perms == nil {
-		return
-	}
 	// Copy
 	info := s.copyLeafNodeInfo()
 	c.mu.Lock()
 	info.CID = c.cid
 	info.Import = c.opts.Import
 	info.Export = c.opts.Export
+	info.ConnectInfo = true
 	b, _ := json.Marshal(info)
 	pcs := [][]byte{[]byte("INFO"), b, []byte(CR_LF)}
 	c.enqueueProto(bytes.Join(pcs, []byte(" ")))
@@ -1206,6 +1230,7 @@ func (s *Server) initLeafNodeSmapAndSendSubs(c *client) {
 	ims := []string{}
 	acc.mu.Lock()
 	accName := acc.Name
+	accNTag := acc.nameTag
 	// If we are solicited we only send interest for local clients.
 	if c.isSpokeLeafNode() {
 		acc.sl.localSubs(&subs)
@@ -1219,6 +1244,10 @@ func (s *Server) initLeafNodeSmapAndSendSubs(c *client) {
 	// Since leaf nodes only send on interest, if the bound
 	// account has import services we need to send those over.
 	for isubj := range acc.imports.services {
+		if !c.canSubscribe(isubj) {
+			c.Debugf("Not permitted to import service %s on behalf of %s/%s", isubj, accName, accNTag)
+			continue
+		}
 		ims = append(ims, isubj)
 	}
 	// Create a unique subject that will be used for loop detection.
@@ -1256,10 +1285,17 @@ func (s *Server) initLeafNodeSmapAndSendSubs(c *client) {
 
 	// Now walk the results and add them to our smap
 	c.mu.Lock()
+	rc := c.leaf.remoteCluster
 	c.leaf.smap = make(map[string]int32)
 	for _, sub := range subs {
+		if !c.canSubscribe(string(sub.subject)) {
+			c.Debugf("Not permitted to subscribe to %s on behalf of %s/%s", string(sub.subject), accName, accNTag)
+			continue
+		}
 		// We ignore ourselves here.
-		if c != sub.client {
+		// Also don't add the subscription if it has a origin cluster and the
+		// cluster name matches the one of the client we are sending to.
+		if c != sub.client && (sub.origin == nil || (string(sub.origin) != rc)) {
 			c.leaf.smap[keyFromSub(sub)]++
 			if c.leaf.tsub == nil {
 				c.leaf.tsub = make(map[*subscription]struct{})
@@ -1344,6 +1380,8 @@ func (s *Server) updateLeafNodes(acc *Account, sub *subscription, delta int32) {
 		// Check to make sure this sub does not have an origin cluster than matches the leafnode.
 		ln.mu.Lock()
 		skip := sub.origin != nil && string(sub.origin) == ln.remoteCluster()
+		// do not skip on !ln.canSubscribe(string(sub.subject))
+		// Given allow:foo, > would be rejected. For leaf nodes filtering is done on the (soliciting) end.
 		ln.mu.Unlock()
 		if skip {
 			continue
@@ -1626,6 +1664,7 @@ func (c *client) processLeafUnsub(arg []byte) error {
 	}
 
 	updateGWs := false
+	spoke := c.isSpokeLeafNode()
 	// We store local subs by account and subject and optionally queue name.
 	// LS- will have the arg exactly as the key.
 	sub, ok := c.subs[string(arg)]
@@ -1636,11 +1675,13 @@ func (c *client) processLeafUnsub(arg []byte) error {
 		updateGWs = srv.gateway.enabled
 	}
 
-	// If we are routing subtract from the route map for the associated account.
-	srv.updateRouteSubscriptionMap(acc, sub, -1)
-	// Gateways
-	if updateGWs {
-		srv.gatewayUpdateSubInterest(acc.Name, sub, -1)
+	if !spoke {
+		// If we are routing subtract from the route map for the associated account.
+		srv.updateRouteSubscriptionMap(acc, sub, -1)
+		// Gateways
+		if updateGWs {
+			srv.gatewayUpdateSubInterest(acc.Name, sub, -1)
+		}
 	}
 	// Now check on leafnode updates for other leaf nodes.
 	srv.updateLeafNodes(acc, sub, -1)
@@ -1809,8 +1850,12 @@ func (c *client) processInboundLeafMsg(msg []byte) {
 	c.in.bytes += int32(len(msg) - LEN_CR_LF)
 
 	// Check pub permissions
-	if c.perms != nil && (c.perms.pub.allow != nil || c.perms.pub.deny != nil) && c.isHubLeafNode() && !c.pubAllowed(string(c.pa.subject)) {
-		c.leafPubPermViolation(c.pa.subject)
+	if c.perms != nil && (c.perms.pub.allow != nil || c.perms.pub.deny != nil) && !c.pubAllowed(string(c.pa.subject)) {
+		if c.isHubLeafNode() {
+			c.leafPubPermViolation(c.pa.subject)
+		} else {
+			c.Debugf("Not permitted to receive from %q", c.pa.subject)
+		}
 		return
 	}
 
@@ -2007,9 +2052,6 @@ func (c *client) leafNodeSolicitWSConnection(opts *Options, rURL *url.URL, remot
 		}
 	}
 
-	var req *http.Request
-	var wsKey string
-
 	// For http request, we need the passed URL to contain either http or https scheme.
 	scheme := "http"
 	if tlsRequired {
@@ -2028,7 +2070,7 @@ func (c *client) leafNodeSolicitWSConnection(opts *Options, rURL *url.URL, remot
 	}
 	ustr := fmt.Sprintf("%s://%s%s", scheme, rURL.Host, path)
 	u, _ := url.Parse(ustr)
-	req = &http.Request{
+	req := &http.Request{
 		Method:     "GET",
 		URL:        u,
 		Proto:      "HTTP/1.1",
@@ -2047,10 +2089,10 @@ func (c *client) leafNodeSolicitWSConnection(opts *Options, rURL *url.URL, remot
 	req.Header["Sec-WebSocket-Key"] = []string{wsKey}
 	req.Header["Sec-WebSocket-Version"] = []string{"13"}
 	if compress {
-		req.Header.Add("Sec-WebSocket-Extensions", wsPMCExtension+wsNoCtxTakeOver)
+		req.Header.Add("Sec-WebSocket-Extensions", wsPMCReqHeaderValue)
 	}
 	if noMasking {
-		req.Header.Add("Sec-WebSocket-Extensions", wsNoMaskingExtension)
+		req.Header.Add(wsNoMaskingHeader, wsNoMaskingValue)
 	}
 	if err := req.Write(c.nc); err != nil {
 		return nil, WriteError, err
@@ -2069,22 +2111,24 @@ func (c *client) leafNodeSolicitWSConnection(opts *Options, rURL *url.URL, remot
 
 		err = fmt.Errorf("invalid websocket connection")
 	}
-	if err == nil && (c.ws.compress || noMasking) {
-		// Check extensions...
+	// Check compression extension...
+	if err == nil && c.ws.compress {
+		// Check that not only permessage-deflate extension is present, but that
+		// we also have server and client no context take over.
+		srvCompress, noCtxTakeover := wsPMCExtensionSupport(resp.Header, false)
 
-		srvCompress, srvNoMasking := wsClientWantedExtensions(resp.Header)
-
-		// We said to the otherside that we support compression. Now check that
-		// the other side said that it supports compression too.
-		if c.ws.compress && !srvCompress {
-			// No extension, or does not contain the indication that per-message
-			// compression is supported, so disable on our side.
+		// If server does not support compression, then simply disable it in our side.
+		if !srvCompress {
 			c.ws.compress = false
+		} else if !noCtxTakeover {
+			err = fmt.Errorf("compression negotiation error")
 		}
-
-		// Same for no masking...
-		if noMasking && !srvNoMasking {
-			// Need to mask our writes as any client would do.
+	}
+	// Same for no masking...
+	if err == nil && noMasking {
+		// Check if server accepts no masking
+		if resp.Header.Get(wsNoMaskingHeader) != wsNoMaskingValue {
+			// Nope, need to mask our writes as any client would do.
 			c.ws.maskwrite = true
 		}
 	}
@@ -2104,10 +2148,11 @@ func (c *client) leafNodeSolicitWSConnection(opts *Options, rURL *url.URL, remot
 	return preBuf, 0, nil
 }
 
+const connectProcessTimeout = 2 * time.Second
+
 // This is invoked for remote LEAF remote connections after processing the INFO
-// protocol. This will do the TLS handshake (if needed be), send the CONNECT protocol
-// and register the leaf node.
-func (s *Server) leafNodeFinishConnectProcess(c *client) {
+// protocol. This will do the TLS handshake (if needed be)
+func (s *Server) leafNodeResumeConnectProcess(c *client) {
 	clusterName := s.ClusterName()
 
 	c.mu.Lock()
@@ -2116,11 +2161,6 @@ func (s *Server) leafNodeFinishConnectProcess(c *client) {
 		return
 	}
 	remote := c.leaf.remote
-
-	// Check if we will need to send the system connect event.
-	remote.RLock()
-	sendSysConnectEvent := remote.Hub
-	remote.RUnlock()
 
 	var tlsRequired bool
 
@@ -2161,10 +2201,50 @@ func (s *Server) leafNodeFinishConnectProcess(c *client) {
 	// Spin up the write loop.
 	s.startGoRoutine(func() { c.writeLoop() })
 
+	// timeout leafNodeFinishConnectProcess
+	c.ping.tmr = time.AfterFunc(connectProcessTimeout, func() {
+		c.mu.Lock()
+		// check if leafNodeFinishConnectProcess was called and prevent later leafNodeFinishConnectProcess
+		if !c.flags.setIfNotSet(connectProcessFinished) {
+			c.mu.Unlock()
+			return
+		}
+		clearTimer(&c.ping.tmr)
+		closed := c.isClosed()
+		c.mu.Unlock()
+		if !closed {
+			c.sendErrAndDebug("Stale Leaf Node Connection - Closing")
+			c.closeConnection(StaleConnection)
+		}
+	})
+	c.mu.Unlock()
 	c.Debugf("Remote leafnode connect msg sent")
+}
+
+// This is invoked for remote LEAF remote connections after processing the INFO
+// protocol and leafNodeResumeConnectProcess.
+// This will send LS+ the CONNECT protocol and register the leaf node.
+func (s *Server) leafNodeFinishConnectProcess(c *client) {
+	c.mu.Lock()
+	if !c.flags.setIfNotSet(connectProcessFinished) {
+		c.mu.Unlock()
+		return
+	}
+	if c.isClosed() {
+		c.mu.Unlock()
+		s.removeLeafNodeConnection(c)
+		return
+	}
+	remote := c.leaf.remote
+	// Check if we will need to send the system connect event.
+	remote.RLock()
+	sendSysConnectEvent := remote.Hub
+	remote.RUnlock()
 
 	// Capture account before releasing lock
 	acc := c.acc
+	// cancel connectProcessTimeout
+	clearTimer(&c.ping.tmr)
 	c.mu.Unlock()
 
 	// Make sure we register with the account here.

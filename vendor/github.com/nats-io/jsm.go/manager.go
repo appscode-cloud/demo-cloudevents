@@ -29,10 +29,12 @@ import (
 )
 
 type Manager struct {
-	nc        *nats.Conn
-	timeout   time.Duration
-	trace     bool
-	validator api.StructValidator
+	nc          *nats.Conn
+	timeout     time.Duration
+	trace       bool
+	validator   api.StructValidator
+	apiPrefix   string
+	eventPrefix string
 
 	sync.Mutex
 }
@@ -96,22 +98,9 @@ func (m *Manager) jsonRequest(subj string, req interface{}, response interface{}
 		}
 	}
 
-	if m.trace {
-		log.Printf(">>> %s\n%s\n\n", subj, string(body))
-	}
-
-	msg, err := m.request(subj, body)
-	if m.trace && msg != nil {
-		log.Printf("<<< %s\n%s\n\n", subj, string(msg.Data))
-	} else if m.trace {
-		log.Printf("<<< %s: %s\n\n", subj, err)
-	}
+	msg, err := m.request(m.apiSubject(subj), body)
 	if err != nil {
 		return err
-	}
-
-	if m.trace {
-		log.Printf("<<< %s\n%s\n\n", subj, string(msg.Data))
 	}
 
 	err = json.Unmarshal(msg.Data, response)
@@ -222,13 +211,30 @@ func (m *Manager) requestWithTimeout(subj string, data []byte, timeout time.Dura
 	ctx, cancel = context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	return m.requestWithContext(ctx, subj, data)
+	res, err = m.requestWithContext(ctx, subj, data)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, err
 }
 
 func (m *Manager) requestWithContext(ctx context.Context, subj string, data []byte) (res *nats.Msg, err error) {
+	if m.trace {
+		log.Printf(">>> %s\n%s\n\n", subj, string(data))
+	}
+
 	res, err = m.nc.RequestWithContext(ctx, subj, data)
 	if err != nil {
+		if m.trace {
+			log.Printf("<<< %s: %s\n\n", subj, err.Error())
+		}
+
 		return res, err
+	}
+
+	if m.trace {
+		log.Printf("<<< %s\n%s\n\n", subj, string(res.Data))
 	}
 
 	return res, ParseErrorResponse(res)
@@ -435,4 +441,38 @@ func (m *Manager) Streams() (streams []*Stream, err error) {
 	}
 
 	return streams, nil
+}
+
+func (m *Manager) apiSubject(subject string) string {
+	return APISubject(subject, m.apiPrefix)
+}
+
+// MetaLeaderStandDown requests the meta group leader to stand down, must be initiated by a system user
+func (m *Manager) MetaLeaderStandDown(placement *api.Placement) error {
+	var resp api.JSApiLeaderStepDownResponse
+	err := m.jsonRequest(api.JSApiLeaderStepDown, api.JSApiLeaderStepDownRequest{Placement: placement}, &resp)
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("unknown error while requesting leader step down")
+	}
+
+	return nil
+}
+
+// MetaPeerRemove removes a peer from the JetStream meta cluster, evicting all streams, consumer etc.  Use with extreme caution.
+func (m *Manager) MetaPeerRemove(name string) error {
+	var resp api.JSApiMetaServerRemoveResponse
+	err := m.jsonRequest(api.JSApiRemoveServer, api.JSApiMetaServerRemoveRequest{Server: name}, &resp)
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("unknown error while requesting leader step down")
+	}
+
+	return nil
 }

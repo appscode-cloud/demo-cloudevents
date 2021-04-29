@@ -83,18 +83,25 @@ func (ms *memStore) UpdateConfig(cfg *StreamConfig) error {
 // Stores a raw message with expected sequence number and timestamp.
 // Lock should be held.
 func (ms *memStore) storeRawMsg(subj string, hdr, msg []byte, seq uint64, ts int64) error {
+	if ms.msgs == nil {
+		return ErrStoreClosed
+	}
+
 	// Check if we are discarding new messages when we reach the limit.
 	if ms.cfg.Discard == DiscardNew {
 		if ms.cfg.MaxMsgs > 0 && ms.state.Msgs >= uint64(ms.cfg.MaxMsgs) {
 			return ErrMaxMsgs
 		}
-		if ms.cfg.MaxBytes > 0 && ms.state.Bytes+uint64(len(msg)) >= uint64(ms.cfg.MaxBytes) {
+		if ms.cfg.MaxBytes > 0 && ms.state.Bytes+uint64(len(msg)+len(hdr)) >= uint64(ms.cfg.MaxBytes) {
 			return ErrMaxBytes
 		}
 	}
 
 	if seq != ms.state.LastSeq+1 {
-		return ErrSequenceMismatch
+		if seq > 0 {
+			return ErrSequenceMismatch
+		}
+		seq = ms.state.LastSeq + 1
 	}
 
 	// Adjust first if needed.
@@ -213,6 +220,37 @@ func (ms *memStore) GetSeqFromTime(t time.Time) uint64 {
 		return ms.msgs[uint64(i)+ms.state.FirstSeq].ts >= ts
 	})
 	return uint64(index) + ms.state.FirstSeq
+}
+
+// Returns number of messages matching the subject starting at sequence sseq.
+func (ms *memStore) NumFilteredPending(sseq uint64, subj string) (total uint64) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	if sseq < ms.state.FirstSeq {
+		sseq = ms.state.FirstSeq
+	}
+
+	if subj == _EMPTY_ {
+		if sseq <= ms.state.LastSeq {
+			return ms.state.LastSeq - sseq
+		}
+		return 0
+	}
+
+	var eq func(string, string) bool
+	if subjectHasWildcard(subj) {
+		eq = subjectIsSubsetMatch
+	} else {
+		eq = func(a, b string) bool { return a == b }
+	}
+
+	for seq := sseq; seq <= ms.state.LastSeq; seq++ {
+		if sm, ok := ms.msgs[seq]; ok && eq(sm.subj, subj) {
+			total++
+		}
+	}
+	return total
 }
 
 // Will check the msg limit and drop firstSeq msg if needed.
@@ -485,11 +523,30 @@ func (ms *memStore) removeMsg(seq uint64, secure bool) bool {
 	}
 
 	if ms.scb != nil {
+		// We do not want to hold any locks here.
+		ms.mu.Unlock()
 		delta := int64(ss)
 		ms.scb(-1, -delta, seq, sm.subj)
+		ms.mu.Lock()
 	}
 
 	return ok
+}
+
+// Type returns the type of the underlying store.
+func (ms *memStore) Type() StorageType {
+	return MemoryStorage
+}
+
+// FastState will fill in state with only the following.
+// Msgs, Bytes, FirstSeq, LastSeq
+func (ms *memStore) FastState(state *StreamState) {
+	ms.mu.RLock()
+	state.Msgs = ms.state.Msgs
+	state.Bytes = ms.state.Bytes
+	state.FirstSeq = ms.state.FirstSeq
+	state.LastSeq = ms.state.LastSeq
+	ms.mu.RUnlock()
 }
 
 func (ms *memStore) State() StreamState {
@@ -505,6 +562,7 @@ func (ms *memStore) State() StreamState {
 		sort.Slice(state.Deleted, func(i, j int) bool {
 			return state.Deleted[i] < state.Deleted[j]
 		})
+		state.NumDeleted = len(state.Deleted)
 	}
 	return state
 }
@@ -583,5 +641,5 @@ func newTemplateMemStore() *templateMemStore {
 }
 
 // No-ops for memstore.
-func (ts *templateMemStore) Store(t *StreamTemplate) error  { return nil }
-func (ts *templateMemStore) Delete(t *StreamTemplate) error { return nil }
+func (ts *templateMemStore) Store(t *streamTemplate) error  { return nil }
+func (ts *templateMemStore) Delete(t *streamTemplate) error { return nil }

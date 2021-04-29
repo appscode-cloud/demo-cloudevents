@@ -81,9 +81,14 @@ const (
 	wsSchemePrefix    = "ws"
 	wsSchemePrefixTLS = "wss"
 
-	wsNoMaskingExtension = "no-masking"
-	wsPMCExtension       = "permessage-deflate" // per-message compression
-	wsNoCtxTakeOver      = "; server_no_context_takeover; client_no_context_takeover; "
+	wsNoMaskingHeader       = "Nats-No-Masking"
+	wsNoMaskingValue        = "true"
+	wsNoMaskingFullResponse = wsNoMaskingHeader + ": " + wsNoMaskingValue + CR_LF
+	wsPMCExtension          = "permessage-deflate" // per-message compression
+	wsPMCSrvNoCtx           = "server_no_context_takeover"
+	wsPMCCliNoCtx           = "client_no_context_takeover"
+	wsPMCReqHeaderValue     = wsPMCExtension + "; " + wsPMCSrvNoCtx + "; " + wsPMCCliNoCtx
+	wsPMCFullResponse       = "Sec-WebSocket-Extensions: " + wsPMCExtension + "; " + wsPMCSrvNoCtx + "; " + wsPMCCliNoCtx + _CRLF_
 )
 
 var decompressorPool sync.Pool
@@ -111,6 +116,7 @@ type srvWebsocket struct {
 	mu             sync.RWMutex
 	server         *http.Server
 	listener       net.Listener
+	listenerErr    error
 	tls            bool
 	allowedOrigins map[string]*allowedOrigin // host will be the key
 	sameOrigin     bool
@@ -631,12 +637,14 @@ func (s *Server) wsUpgrade(w http.ResponseWriter, r *http.Request) (*wsUpgradeRe
 	// Point 8.
 	// We don't have protocols, so ignore.
 	// Point 9.
-	// Extensions, only support for compression and no-masking at the moment
-	wantsCompress, wantsNoMasking := wsClientWantedExtensions(r.Header)
-	// We will use compression only if both agree
-	compress := opts.Websocket.Compression && wantsCompress
+	// Extensions, only support for compression at the moment
+	compress := opts.Websocket.Compression
+	if compress {
+		// Simply check if permessage-deflate extension is present.
+		compress, _ = wsPMCExtensionSupport(r.Header, true)
+	}
 	// We will do masking if asked (unless we reject for tests)
-	noMasking := wantsNoMasking && !wsTestRejectNoMasking
+	noMasking := r.Header.Get(wsNoMaskingHeader) == wsNoMaskingValue && !wsTestRejectNoMasking
 
 	h := w.(http.Hijacker)
 	conn, brw, err := h.Hijack()
@@ -658,16 +666,11 @@ func (s *Server) wsUpgrade(w http.ResponseWriter, r *http.Request) (*wsUpgradeRe
 	p = append(p, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "...)
 	p = append(p, wsAcceptKey(key)...)
 	p = append(p, _CRLF_...)
-	if compress || noMasking {
-		p = append(p, "Sec-WebSocket-Extensions: "...)
-		if compress {
-			p = append(p, wsPMCExtension...)
-			p = append(p, wsNoCtxTakeOver...)
-		}
-		if noMasking {
-			p = append(p, wsNoMaskingExtension...)
-		}
-		p = append(p, CR_LF...)
+	if compress {
+		p = append(p, wsPMCFullResponse...)
+	}
+	if noMasking {
+		p = append(p, wsNoMaskingFullResponse...)
 	}
 	p = append(p, _CRLF_...)
 
@@ -710,28 +713,38 @@ func wsHeaderContains(header http.Header, name string, value string) bool {
 	return false
 }
 
-// Return if known extensions are wanted by the client.
-func wsClientWantedExtensions(header http.Header) (bool, bool) {
-	var compress bool
-	var noMasking bool
-
+func wsPMCExtensionSupport(header http.Header, checkPMCOnly bool) (bool, bool) {
 	for _, extensionList := range header["Sec-Websocket-Extensions"] {
 		extensions := strings.Split(extensionList, ",")
 		for _, extension := range extensions {
 			extension = strings.Trim(extension, " \t")
 			params := strings.Split(extension, ";")
-			for _, p := range params {
-				p = strings.ToLower(strings.Trim(p, " \t"))
-				switch p {
-				case wsPMCExtension:
-					compress = true
-				case wsNoMaskingExtension:
-					noMasking = true
+			for i, p := range params {
+				p = strings.Trim(p, " \t")
+				if strings.EqualFold(p, wsPMCExtension) {
+					if checkPMCOnly {
+						return true, false
+					}
+					var snc bool
+					var cnc bool
+					for j := i + 1; j < len(params); j++ {
+						p = params[j]
+						p = strings.Trim(p, " \t")
+						if strings.EqualFold(p, wsPMCSrvNoCtx) {
+							snc = true
+						} else if strings.EqualFold(p, wsPMCCliNoCtx) {
+							cnc = true
+						}
+						if snc && cnc {
+							return true, true
+						}
+					}
+					return true, false
 				}
 			}
 		}
 	}
-	return compress, noMasking
+	return false, false
 }
 
 // Send an HTTP error with the given `status`` to the given http response writer `w`.
@@ -943,25 +956,27 @@ func (s *Server) startWebsocketServer() {
 	if o.TLSConfig != nil {
 		proto = wsSchemePrefixTLS
 		config := o.TLSConfig.Clone()
+		config.GetConfigForClient = s.wsGetTLSConfig
 		hl, err = tls.Listen("tcp", hp, config)
 	} else {
 		proto = wsSchemePrefix
 		hl, err = net.Listen("tcp", hp)
 	}
+	s.websocket.listenerErr = err
 	if err != nil {
 		s.mu.Unlock()
 		s.Fatalf("Unable to listen for websocket connections: %v", err)
 		return
 	}
-	s.Noticef("Listening for websocket clients on %s://%s:%d", proto, o.Host, port)
+	if port == 0 {
+		o.Port = hl.Addr().(*net.TCPAddr).Port
+	}
+	s.Noticef("Listening for websocket clients on %s://%s:%d", proto, o.Host, o.Port)
 	if proto == wsSchemePrefix {
 		s.Warnf("Websocket not configured with TLS. DO NOT USE IN PRODUCTION!")
 	}
 
 	s.websocket.tls = proto == "wss"
-	if port == 0 {
-		s.opts.Websocket.Port = hl.Addr().(*net.TCPAddr).Port
-	}
 	s.websocket.connectURLs, err = s.getConnectURLs(o.Advertise, o.Host, o.Port)
 	if err != nil {
 		s.Fatalf("Unable to get websocket connect URLs: %v", err)
@@ -1016,6 +1031,17 @@ func (s *Server) startWebsocketServer() {
 	s.mu.Unlock()
 }
 
+// The TLS configuration is passed to the listener when the websocket
+// "server" is setup. That prevents TLS configuration updates on reload
+// from being used. By setting this function in tls.Config.GetConfigForClient
+// we instruct the TLS handshake to ask for the tls configuration to be
+// used for a specific client. We don't care which client, we always use
+// the same TLS configuration.
+func (s *Server) wsGetTLSConfig(_ *tls.ClientHelloInfo) (*tls.Config, error) {
+	opts := s.getOpts()
+	return opts.Websocket.TLSConfig, nil
+}
+
 // This is similar to createClient() but has some modifications
 // specific to handle websocket clients.
 // The comments have been kept to minimum to reduce code size.
@@ -1028,7 +1054,7 @@ func (s *Server) createWSClient(conn net.Conn, ws *websocket) *client {
 	if maxSubs == 0 {
 		maxSubs = -1
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 
 	c := &client{srv: s, nc: conn, opts: defaultOpts, mpay: maxPay, msubs: maxSubs, start: now, last: now, ws: ws}
 
@@ -1223,12 +1249,17 @@ func (c *client) wsCollapsePtoNB() (net.Buffers, int64) {
 					continue
 				}
 				for len(b) > 0 {
-					endFrame(fhIdx, total)
+					endStart := total != 0
+					if endStart {
+						endFrame(fhIdx, total)
+					}
 					total = len(b)
 					if total >= mfs {
 						total = mfs
 					}
-					fhIdx = startFrame()
+					if endStart {
+						fhIdx = startFrame()
+					}
 					bufs = append(bufs, b[:total])
 					b = b[total:]
 				}

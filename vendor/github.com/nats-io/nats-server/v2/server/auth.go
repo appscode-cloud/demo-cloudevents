@@ -47,6 +47,8 @@ type ClientAuthentication interface {
 	RegisterUser(*User)
 	// RemoteAddress expose the connection information of the client
 	RemoteAddress() net.Addr
+	// Kind indicates what type of connection this is matching defined constants like CLIENT, ROUTER, GATEWAY, LEAF etc
+	Kind() int
 }
 
 // NkeyUser is for multiple nkey based users
@@ -326,11 +328,20 @@ func (s *Server) isClientAuthorized(c *client) bool {
 	// Check custom auth first, then jwts, then nkeys, then
 	// multiple users with TLS map if enabled, then token,
 	// then single user/pass.
-	if opts.CustomClientAuthentication != nil {
-		return opts.CustomClientAuthentication.Check(c)
+	if opts.CustomClientAuthentication != nil && !opts.CustomClientAuthentication.Check(c) {
+		return false
 	}
 
-	return s.processClientOrLeafAuthentication(c, opts)
+	if opts.CustomClientAuthentication == nil && !s.processClientOrLeafAuthentication(c, opts) {
+		return false
+	}
+
+	if c.kind == CLIENT || c.kind == LEAF {
+		// Generate an event if we have a system account.
+		s.accountConnectEvent(c)
+	}
+
+	return true
 }
 
 func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) bool {
@@ -500,13 +511,15 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 			// but we set it here to be able to identify it in the logs.
 			c.opts.Username = user.Username
 		} else {
-			if c.kind == CLIENT && c.opts.Username == "" && noAuthUser != "" {
+			if c.kind == CLIENT && c.opts.Username == _EMPTY_ && noAuthUser != _EMPTY_ {
 				if u, exists := s.users[noAuthUser]; exists {
+					c.mu.Lock()
 					c.opts.Username = u.Username
 					c.opts.Password = u.Password
+					c.mu.Unlock()
 				}
 			}
-			if c.opts.Username != "" {
+			if c.opts.Username != _EMPTY_ {
 				user, ok = s.users[c.opts.Username]
 				if !ok || !c.connectionTypeAllowed(user.AllowedConnectionTypes) {
 					s.mu.Unlock()
@@ -630,9 +643,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 		c.nameTag = juc.Name
 		c.mu.Unlock()
 
-		// Generate an event if we have a system account.
-		s.accountConnectEvent(c)
-
 		// Check if we need to set an auth timer if the user jwt expires.
 		c.setExpiration(juc.Claims(), validFor)
 
@@ -678,8 +688,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 		// for pub/sub authorizations.
 		if ok {
 			c.RegisterUser(user)
-			// Generate an event if we have a system account and this is not the $G account.
-			s.accountConnectEvent(c)
 		}
 		return ok
 	}
@@ -986,9 +994,14 @@ func (s *Server) isLeafNodeAuthorized(c *client) bool {
 				s.Warnf("User %q found in connect proto, but user required from cert", c.opts.Username)
 			}
 			c.opts.Username = user.Username
+			// EMPTY will result in $G
+			accName := _EMPTY_
+			if user.Account != nil {
+				accName = user.Account.GetName()
+			}
 			// This will authorize since are using an existing user,
 			// but it will also register with proper account.
-			return isAuthorized(user.Username, user.Password, user.Account.GetName())
+			return isAuthorized(user.Username, user.Password, accName)
 		}
 
 		// This is expected to be a very small array.
@@ -1009,11 +1022,11 @@ func (s *Server) isLeafNodeAuthorized(c *client) bool {
 	// Still, if the CONNECT has some user info, we will bind to the
 	// user's account or to the specified default account (if provided)
 	// or to the global account.
-	return s.processClientOrLeafAuthentication(c, opts)
+	return s.isClientAuthorized(c)
 }
 
 // Support for bcrypt stored passwords and tokens.
-var validBcryptPrefix = regexp.MustCompile(`^\$2[a,b,x,y]{1}\$\d{2}\$.*`)
+var validBcryptPrefix = regexp.MustCompile(`^\$2[abxy]\$\d{2}\$.*`)
 
 // isBcrypt checks whether the given password or token is bcrypted.
 func isBcrypt(password string) bool {

@@ -27,6 +27,7 @@ const (
 	JSApiConsumerInfoT                     = "$JS.API.CONSUMER.INFO.%s.%s"
 	JSApiConsumerDeleteT                   = "$JS.API.CONSUMER.DELETE.%s.%s"
 	JSApiRequestNextT                      = "$JS.API.CONSUMER.MSG.NEXT.%s.%s"
+	JSApiConsumerLeaderStepDownT           = "$JS.API.CONSUMER.LEADER.STEPDOWN.%s.%s"
 	JSMetricConsumerAckPre                 = JSMetricPrefix + ".CONSUMER.ACK"
 	JSAdvisoryConsumerMaxDeliveryExceedPre = JSAdvisoryPrefix + ".CONSUMER.MAX_DELIVERIES"
 )
@@ -77,6 +78,12 @@ type JSApiConsumerListResponse struct {
 	JSApiResponse
 	JSApiIterableResponse
 	Consumers []*ConsumerInfo `json:"consumers"`
+}
+
+// io.nats.jetstream.api.v1.consumer_leader_stepdown_response
+type JSApiConsumerLeaderStepDownResponse struct {
+	JSApiResponse
+	Success bool `json:"success,omitempty"`
 }
 
 type AckPolicy int
@@ -256,6 +263,8 @@ type ConsumerConfig struct {
 	SampleFrequency string        `json:"sample_freq,omitempty"`
 	RateLimit       uint64        `json:"rate_limit_bps,omitempty"`
 	MaxAckPending   int           `json:"max_ack_pending,omitempty"`
+	Heartbeat       time.Duration `json:"idle_heartbeat,omitempty"`
+	FlowControl     bool          `json:"flow_control,omitempty"`
 }
 
 // SequencePair is the consumer and stream sequence that uniquely identify a message
@@ -283,9 +292,9 @@ type ConsumerInfo struct {
 //
 // NATS Schema Type io.nats.jetstream.api.v1.consumer_getnext_request
 type JSApiConsumerGetNextRequest struct {
-	Expires time.Time `json:"expires,omitempty"`
-	Batch   int       `json:"batch,omitempty"`
-	NoWait  bool      `json:"no_wait,omitempty"`
+	Expires time.Duration `json:"expires,omitempty"`
+	Batch   int           `json:"batch,omitempty"`
+	NoWait  bool          `json:"no_wait,omitempty"`
 }
 
 func jsonString(s string) string {
