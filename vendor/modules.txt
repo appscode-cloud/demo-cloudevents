@@ -55,7 +55,7 @@ github.com/nats-io/jsm.go/schemas
 # github.com/nats-io/jwt/v2 v2.0.2-0.20210423002137-22ab5427e625
 ## explicit
 github.com/nats-io/jwt/v2
-# github.com/nats-io/nats-server/v2 v2.2.3-0.20210427005056-a67704e245a0
+# github.com/nats-io/nats-server/v2 v2.2.2
 ## explicit
 github.com/nats-io/nats-server/v2/conf
 github.com/nats-io/nats-server/v2/internal/ldap

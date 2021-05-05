@@ -377,7 +377,7 @@ func StoreServerConfiguration(sPub string) error {
 	*/
 	err := ioutil.WriteFile(confs.ServerConfigFile, []byte(fmt.Sprintf(`jetstream: {max_mem_store: 10Gb, max_file_store: 10Gb, store_dir: %s}
 host: 0.0.0.0
-port: 5222
+port: 4222
 operator: %s
 resolver: URL(%s)
 system_account: %s
@@ -386,7 +386,7 @@ websocket: {
  	port: 9222
  	no_tls: true
 }
-`, confs.JSStoreDir, confs.OpJwtPath, "http://localhost:9090/jwt/v1/accounts/", sPub)), 0666)
+`, confs.JSStoreDir(), confs.OpJwtPath, "http://localhost:9090/jwt/v1/accounts/", sPub)), 0666)
 	if err != nil {
 		return err
 	}
@@ -405,7 +405,7 @@ nats: {
     servers: ["nats://localhost:5222"],
     usercredentials: %s
 }
-`, confs.OpJwtPath, confs.AccServerDir, confs.SysCredFile)), 0666)
+`, confs.OpJwtPath, confs.AccServerDir(), confs.SysCredFile)), 0666)
 	if err != nil {
 		return err
 	}
