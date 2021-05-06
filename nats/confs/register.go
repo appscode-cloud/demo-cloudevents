@@ -52,7 +52,7 @@ func UpdateCredentialPaths() {
 
 	YAccountCreds = filepath.Join(ConfDir(), "Y_account.creds")
 	YAccountJwt = filepath.Join(ConfDir(), "Y.jwt")
-	YCredFile = filepath.Join(ConfDir(), "Y.creds")
+	YCredFile = filepath.Join(ConfDir(), "y.creds")
 
 	ServerConfigFile = filepath.Join(ConfDir(), "server.conf")
 	AccountServerConfig = filepath.Join(ConfDir(), "nas.conf")

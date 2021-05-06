@@ -15,6 +15,7 @@ import (
 
 func main() {
 	// Push system account information to account server
+	confs.UpdateCredentialPaths()
 	sJwt, err := ioutil.ReadFile(confs.SYSAccountJwt)
 	if err != nil {
 		panic(err)

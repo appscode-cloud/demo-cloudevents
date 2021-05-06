@@ -48,9 +48,10 @@ func main() {
 		panic(err)
 	}
 
-	aKp, _, aSeed, aJwt, err := CreateAccount("Admin", oKp)
+	aKp, aPub, aSeed, aJwt, err := CreateAccount("Admin", oKp)
 	if err != nil {
 		panic(err)
+		println(aPub)
 	}
 	_, _, auSeed, auJwt, err := CreateUser("admin", aKp)
 	if err != nil {
@@ -120,6 +121,13 @@ func main() {
 			ResponseType: jwt.ResponseTypeStream,
 		},
 	}
+	//claim.Imports.Add(&jwt.Import{
+	//	Name:         "events.s11.user.57.k8s.d4148056-0d32-424f-ba52-69562caec5e1.product.kubedb-community",
+	//	Subject:      "events.s11.user.57.k8s.d4148056-0d32-424f-ba52-69562caec5e1.product.kubedb-community",
+	//	Account:      aPub,
+	//	LocalSubject: "events.s11.user.57.k8s.d4148056-0d32-424f-ba52-69562caec5e1.product.kubedb-community",
+	//	Type:         jwt.Service,
+	//})
 	yJwt, err = claim.Encode(oKp)
 	if err != nil {
 		panic(err)
@@ -164,6 +172,13 @@ func main() {
 	//		Type:         jwt.Service,
 	//	},
 	//}
+	//
+	//claim.Exports.Add(&jwt.Export{
+	//	Name:         "events.s11.user.57.k8s.d4148056-0d32-424f-ba52-69562caec5e1.product.kubedb-community",
+	//	Subject:      "events.s11.user.57.k8s.d4148056-0d32-424f-ba52-69562caec5e1.product.kubedb-community",
+	//	Type:         jwt.Service,
+	//	ResponseType: jwt.ResponseTypeStream,
+	//})
 	aJwt, err = claim.Encode(oKp)
 	if err != nil {
 		panic(err)
@@ -402,7 +417,7 @@ store {
     shard: true
 }
 nats: {
-    servers: ["nats://localhost:5222"],
+    servers: ["nats://localhost:4222"],
     usercredentials: %s
 }
 `, confs.OpJwtPath, confs.AccServerDir(), confs.SysCredFile)), 0666)
