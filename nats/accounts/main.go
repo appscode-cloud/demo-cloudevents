@@ -505,7 +505,7 @@ func CreateNatsYAMLs(SysPub string) error {
 		return err
 	}
 
-	conf := fmt.Sprintf(string(data), enc([]byte(SysPub)))
+	conf := fmt.Sprintf(string(data), SysPub)
 	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "nats-conf.yaml"), []byte(conf), os.ModePerm); err != nil {
 		return err
 	}
