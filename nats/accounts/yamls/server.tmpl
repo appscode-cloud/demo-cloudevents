@@ -42,7 +42,7 @@ spec:
         spec:
             containers:
                 - name: nats-server
-                  image: synadia/nats-server:nightly
+                  image: %s
                   args: ["-c", "/nats/confs/nats-server.conf"]
                   ports:
                       - containerPort: 4222

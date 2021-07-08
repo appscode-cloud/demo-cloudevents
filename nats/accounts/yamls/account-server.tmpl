@@ -58,7 +58,7 @@ spec:
         spec:
             containers:
                 - name: account-server
-                  image: masudjuly02/nats-account-server:1.0.0
+                  image: %s
                   args: ["-c", "/nats/confs/account-server.conf"]
                   ports:
                       - containerPort: 9090

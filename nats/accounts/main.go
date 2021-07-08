@@ -482,7 +482,7 @@ func CreateNatsYAMLs(SysPub string) error {
 		return err
 	}
 
-	data, err := ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/creds.yaml"))
+	data, err := ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/creds.tmpl"))
 	if err != nil {
 		return err
 	}
@@ -500,7 +500,7 @@ func CreateNatsYAMLs(SysPub string) error {
 		return err
 	}
 
-	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/nats-conf.yaml"))
+	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/nats-conf.tmpl"))
 	if err != nil {
 		return err
 	}
@@ -510,19 +510,28 @@ func CreateNatsYAMLs(SysPub string) error {
 		return err
 	}
 
-	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/account-server.yaml"))
+	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/account-server.tmpl"))
 	if err != nil {
-		return err
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "account-server.yaml"), data, os.ModePerm); err != nil {
 		return err
 	}
 
-	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/server.yaml"))
+	image := "natsio/nats-account-server:1.0.0"
+	if img := os.Getenv("NAS_IMAGE"); len(img) > 0 {
+		image = img
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "account-server.yaml"), []byte(fmt.Sprintf(string(data), image)), os.ModePerm); err != nil {
+		return err
+	}
+
+	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/server.tmpl"))
 	if err != nil {
 		return err
 	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "server.yaml"), data, os.ModePerm); err != nil {
+	image = "nats:2.3.2-alpine"
+	if img := os.Getenv("NATS_IMAGE"); len(img) > 0 {
+		image = img
+	}
+	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "server.yaml"), []byte(fmt.Sprintf(string(data), image)), os.ModePerm); err != nil {
 		return err
 	}
 
