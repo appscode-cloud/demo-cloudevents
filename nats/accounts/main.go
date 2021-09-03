@@ -488,6 +488,7 @@ func CreateNatsYAMLs(SysPub string) error {
 	}
 	enc := base64.StdEncoding.EncodeToString
 	creds := fmt.Sprintf(string(data),
+		// For Secret
 		enc(opCreds),
 		enc(opJwt),
 		enc(SysCreds),
@@ -495,6 +496,10 @@ func CreateNatsYAMLs(SysPub string) error {
 		enc(sysCreds),
 		enc(AdminCreds),
 		enc(adminCreds),
+
+		// For ConfigMap
+		opJwt,
+		SysJwt,
 	)
 	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "creds.yaml"), []byte(creds), os.ModePerm); err != nil {
 		return err
