@@ -233,7 +233,7 @@ func main() {
 		panic(err)
 	}
 
-	if err = CreateNatsYAMLs(sPub); err != nil {
+	if err = CreateNatsYAMLs(sPub, aPub); err != nil {
 		panic(err)
 	}
 
@@ -452,7 +452,7 @@ func FormatCredentialConfig(jwtString string, seed []byte) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-func CreateNatsYAMLs(SysPub string) error {
+func CreateNatsYAMLs(SysPub, AdminPub string) error {
 	opCreds, err := ioutil.ReadFile(filepath.Join(confs.OperatorCreds))
 	if err != nil {
 		return err
@@ -470,6 +470,10 @@ func CreateNatsYAMLs(SysPub string) error {
 		return err
 	}
 	sysCreds, err := ioutil.ReadFile(filepath.Join(confs.SysCredFile))
+	if err != nil {
+		return err
+	}
+	AdminJwt, err := ioutil.ReadFile(filepath.Join(confs.AdminAccountJwt))
 	if err != nil {
 		return err
 	}
@@ -510,7 +514,7 @@ func CreateNatsYAMLs(SysPub string) error {
 		return err
 	}
 
-	conf := fmt.Sprintf(string(data), SysPub)
+	conf := fmt.Sprintf(string(data), SysPub, SysPub, SysJwt, AdminPub, AdminJwt)
 	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "nats-conf.yaml"), []byte(conf), os.ModePerm); err != nil {
 		return err
 	}

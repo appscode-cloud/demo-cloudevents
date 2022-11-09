@@ -11,12 +11,25 @@ stringData:
         host: 0.0.0.0
         port: 4222
         operator: "/nats/creds/Operator.jwt"
-        resolver: URL(http://account-server.default.svc:9090/jwt/v1/accounts/)
         system_account: %s
         max_payload: 8Mb
         websocket: {
-          host: 0.0.0.0
-          port: 9222
-          no_tls: true
-          allowed_origins: ["http://bb.test:3000", "http://console.bb.test:5990", "http://grafana.bb.test:3005", "http://kubedb.bb.test:5996"]
+            host: 0.0.0.0
+                port: 9222
+                no_tls: true
+                allowed_origins: ["http://bb.test:5998", "http://accounts.bb.test:3000", "http://console.bb.test:5990", "http://grafana.bb.test:3005", "http://kubedb.bb.test:5996"]
+        }
+        authorization: {
+            timeout: 10s
+        }
+
+        resolver: {
+            type: full
+                dir: "/nats/resolver/accounts/jwt"
+                allow_delete: false
+                interval: "2m"
+        }
+        resolver_preload: {
+            "%s": "%s",
+            "%s": "%s"
         }

@@ -58,6 +58,8 @@ spec:
                         subPath: Operator.jwt
                       - name: jetstream-dir
                         mountPath: /nats/jetstream
+                      - name: nats-resolver
+                        mountPath: /nats/resolver/accounts/jwt
             volumes:
                 - secret:
                       secretName: nats-server-config
@@ -67,3 +69,18 @@ spec:
                   name: nats-credentials
                 - emptyDir: {}
                   name: jetstream-dir
+                - name: nats-resolver
+                  persistentVolumeClaim:
+                      claimName: account-server
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+    name: nats-resolver
+spec:
+    accessModes:
+        - ReadWriteOnce
+    storageClassName: standard
+    resources:
+        requests:
+            storage: 500Mi

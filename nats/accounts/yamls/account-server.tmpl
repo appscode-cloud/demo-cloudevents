@@ -80,9 +80,22 @@ spec:
                 - secret:
                       secretName: account-server-config
                   name: account-server-config
-                - emptyDir: {}
-                  name: directory-store
+                - name: directory-store
+                  persistentVolumeClaim:
+                      claimName: account-server
                 - secret:
                       secretName: nats-credentials
                   name: nats-credentials
 
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+    name: account-server
+spec:
+    accessModes:
+    - ReadWriteOnce
+    storageClassName: standard
+    resources:
+        requests:
+            storage: 500Mi
