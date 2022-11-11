@@ -519,24 +519,11 @@ func CreateNatsYAMLs(SysPub, AdminPub string) error {
 		return err
 	}
 
-	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/account-server.tmpl"))
-	if err != nil {
-		return err
-	}
-
-	image := "natsio/nats-account-server:1.0.0"
-	if img := os.Getenv("NAS_IMAGE"); len(img) > 0 {
-		image = img
-	}
-	if err = ioutil.WriteFile(filepath.Join(confs.ConfDir(), "account-server.yaml"), []byte(fmt.Sprintf(string(data), image)), os.ModePerm); err != nil {
-		return err
-	}
-
 	data, err = ioutil.ReadFile(filepath.Join(demo_cloudevents.BaseDirectory, "nats/accounts/yamls/server.tmpl"))
 	if err != nil {
 		return err
 	}
-	image = "nats:2.3.2-alpine"
+	image := "nats:2.3.2-alpine"
 	if img := os.Getenv("NATS_IMAGE"); len(img) > 0 {
 		image = img
 	}
