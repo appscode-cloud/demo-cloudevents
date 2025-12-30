@@ -19,9 +19,6 @@ github.com/cloudevents/sdk-go/v2/observability
 github.com/cloudevents/sdk-go/v2/protocol
 github.com/cloudevents/sdk-go/v2/protocol/http
 github.com/cloudevents/sdk-go/v2/types
-# github.com/davecgh/go-spew v1.1.1
-## explicit
-github.com/davecgh/go-spew/spew
 # github.com/fatih/color v1.9.0
 github.com/fatih/color
 # github.com/google/uuid v1.1.1
@@ -112,6 +109,6 @@ golang.org/x/sys/windows/svc/eventlog
 golang.org/x/sys/windows/svc/mgr
 # golang.org/x/time v0.0.0-20200416051211-89c76fbcd5d1
 golang.org/x/time/rate
-# google.golang.org/protobuf v1.24.0
+# google.golang.org/protobuf v1.33.0
 ## explicit
 # github.com/nats-io/nats-server/v2 => github.com/masudur-rahman/nats-server/v2 v2.1.8-0.20200929110001-c8c48f43e224
