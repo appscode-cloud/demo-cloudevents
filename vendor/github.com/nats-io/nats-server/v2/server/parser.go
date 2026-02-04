@@ -1,4 +1,4 @@
-// Copyright 2012-2020 The NATS Authors
+// Copyright 2012-2024 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -35,19 +35,21 @@ type parseState struct {
 }
 
 type pubArg struct {
-	arg     []byte
-	pacache []byte
-	origin  []byte
-	account []byte
-	subject []byte
-	deliver []byte
-	reply   []byte
-	szb     []byte
-	hdb     []byte
-	queues  [][]byte
-	size    int
-	hdr     int
-	psi     *serviceImport
+	arg       []byte
+	pacache   []byte
+	origin    []byte
+	account   []byte
+	subject   []byte
+	deliver   []byte
+	mapped    []byte
+	reply     []byte
+	szb       []byte
+	hdb       []byte
+	queues    [][]byte
+	size      int
+	hdr       int
+	psi       []*serviceImport
+	delivered bool // Only used for service imports
 }
 
 // Parser constants
@@ -146,8 +148,7 @@ func (c *client) parse(buf []byte) error {
 	// proper CONNECT if needed.
 	authSet := c.awaitingAuth()
 	// Snapshot max control line as well.
-	mcl := c.mcl
-	trace := c.trace
+	s, mcl, trace := c.srv, c.mcl, c.trace
 	c.mu.Unlock()
 
 	// Move to loop instead of range syntax to allow jumping of i
@@ -159,7 +160,28 @@ func (c *client) parse(buf []byte) error {
 			c.op = b
 			if b != 'C' && b != 'c' {
 				if authSet {
-					goto authErr
+					if s == nil {
+						goto authErr
+					}
+					var ok bool
+					// Check here for NoAuthUser. If this is set allow non CONNECT protos as our first.
+					// E.g. telnet proto demos.
+					if noAuthUser := s.getOpts().NoAuthUser; noAuthUser != _EMPTY_ {
+						s.mu.Lock()
+						user, exists := s.users[noAuthUser]
+						s.mu.Unlock()
+						if exists {
+							c.RegisterUser(user)
+							c.mu.Lock()
+							c.clearAuthTimer()
+							c.flags.set(connectReceived)
+							c.mu.Unlock()
+							authSet, ok = false, true
+						}
+					}
+					if !ok {
+						goto authErr
+					}
 				}
 				// If the connection is a gateway connection, make sure that
 				// if this is an inbound, it starts with a CONNECT.
@@ -267,6 +289,7 @@ func (c *client) parse(buf []byte) error {
 				if err := c.processHeaderPub(arg); err != nil {
 					return err
 				}
+
 				c.drop, c.as, c.state = 0, i+1, MSG_PAYLOAD
 				// If we don't have a saved buffer then jump ahead with
 				// the index. If this overruns what is left we fall out
@@ -405,17 +428,7 @@ func (c *client) parse(buf []byte) error {
 				if err := c.processPub(arg); err != nil {
 					return err
 				}
-				// Check if we have and account mappings or tees or filters.
-				// FIXME(dlc) - Probably better way to do this.
-				// Could add in cache but will be tricky since results based on pub subject are dynamic
-				// due to wildcard matching and weight sets.
-				if c.kind == CLIENT && c.in.flags.isSet(hasMappings) {
-					old := c.pa.subject
-					changed := c.selectMappedSubject()
-					if trace && changed {
-						c.traceInOp("MAPPING", []byte(fmt.Sprintf("%s -> %s", old, c.pa.subject)))
-					}
-				}
+
 				c.drop, c.as, c.state = 0, i+1, MSG_PAYLOAD
 				// If we don't have a saved buffer then jump ahead with
 				// the index. If this overruns what is left we fall out
@@ -470,15 +483,25 @@ func (c *client) parse(buf []byte) error {
 			} else {
 				c.msgBuf = buf[c.as : i+1]
 			}
+
+			// Check for mappings.
+			if (c.kind == CLIENT || c.kind == LEAF) && c.in.flags.isSet(hasMappings) {
+				changed := c.selectMappedSubject()
+				if trace && changed {
+					c.traceInOp("MAPPING", []byte(fmt.Sprintf("%s -> %s", c.pa.mapped, c.pa.subject)))
+				}
+			}
 			if trace {
 				c.traceMsg(c.msgBuf)
 			}
+
 			c.processInboundMsg(c.msgBuf)
 			c.argBuf, c.msgBuf, c.header = nil, nil, nil
 			c.drop, c.as, c.state = 0, i+1, OP_START
 			// Drop all pub args
-			c.pa.arg, c.pa.pacache, c.pa.origin, c.pa.account, c.pa.subject = nil, nil, nil, nil, nil
+			c.pa.arg, c.pa.pacache, c.pa.origin, c.pa.account, c.pa.subject, c.pa.mapped = nil, nil, nil, nil, nil, nil
 			c.pa.reply, c.pa.hdr, c.pa.size, c.pa.szb, c.pa.hdb, c.pa.queues = nil, -1, 0, nil, nil, nil
+			c.pa.delivered = false
 			lmsg = false
 		case OP_A:
 			switch b {
@@ -767,7 +790,8 @@ func (c *client) parse(buf []byte) error {
 							c.traceInOp("LS-", arg)
 						}
 					}
-					err = c.processRemoteUnsub(arg)
+					leafUnsub := c.op == 'L' || c.op == 'l'
+					err = c.processRemoteUnsub(arg, leafUnsub)
 				case GATEWAY:
 					if trace {
 						c.traceInOp("RS-", arg)
@@ -1189,7 +1213,7 @@ authErr:
 parseErr:
 	c.sendErr("Unknown Protocol Operation")
 	snip := protoSnippet(i, PROTO_SNIPPET_SIZE, buf)
-	err := fmt.Errorf("%s parser ERROR, state=%d, i=%d: proto='%s...'", c.typeString(), c.state, i, snip)
+	err := fmt.Errorf("%s parser ERROR, state=%d, i=%d: proto='%s...'", c.kindString(), c.state, i, snip)
 	return err
 }
 
