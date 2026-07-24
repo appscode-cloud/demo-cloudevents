@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 The NATS Authors
+ * Copyright 2020-2024 The NATS Authors
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/nats-io/nkeys"
 )
@@ -66,10 +67,11 @@ func (t *ScopeType) UnmarshalJSON(b []byte) error {
 }
 
 type UserScope struct {
-	Kind     ScopeType            `json:"kind"`
-	Key      string               `json:"key"`
-	Role     string               `json:"role"`
-	Template UserPermissionLimits `json:"template"`
+	Kind        ScopeType            `json:"kind"`
+	Key         string               `json:"key"`
+	Role        string               `json:"role"`
+	Template    UserPermissionLimits `json:"template"`
+	Description string               `json:"description"`
 }
 
 func NewUserScope() *UserScope {
@@ -120,11 +122,18 @@ func (sk SigningKeys) Validate(vr *ValidationResults) {
 }
 
 // MarshalJSON serializes the scoped signing keys as an array
-func (sk SigningKeys) MarshalJSON() ([]byte, error) {
+func (sk *SigningKeys) MarshalJSON() ([]byte, error) {
+	if sk == nil {
+		return nil, nil
+	}
+
+	keys := sk.Keys()
+	sort.Strings(keys)
+
 	var a []interface{}
-	for k, v := range sk {
-		if v != nil {
-			a = append(a, v)
+	for _, k := range keys {
+		if (*sk)[k] != nil {
+			a = append(a, (*sk)[k])
 		} else {
 			a = append(a, k)
 		}
@@ -132,7 +141,10 @@ func (sk SigningKeys) MarshalJSON() ([]byte, error) {
 	return json.Marshal(a)
 }
 
-func (sk SigningKeys) UnmarshalJSON(data []byte) error {
+func (sk *SigningKeys) UnmarshalJSON(data []byte) error {
+	if *sk == nil {
+		*sk = make(SigningKeys)
+	}
 	// read an array - we can have a string or an map
 	var a []interface{}
 	if err := json.Unmarshal(data, &a); err != nil {
@@ -141,7 +153,7 @@ func (sk SigningKeys) UnmarshalJSON(data []byte) error {
 	for _, i := range a {
 		switch v := i.(type) {
 		case string:
-			sk[v] = nil
+			(*sk)[v] = nil
 		case map[string]interface{}:
 			d, err := json.Marshal(v)
 			if err != nil {
@@ -153,7 +165,7 @@ func (sk SigningKeys) UnmarshalJSON(data []byte) error {
 				if err := json.Unmarshal(d, &us); err != nil {
 					return err
 				}
-				sk[us.Key] = us
+				(*sk)[us.Key] = us
 			default:
 				return fmt.Errorf("unknown signing key scope %q", v["type"])
 			}
