@@ -29,7 +29,6 @@ import (
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats-server/v2/internal/ldap"
 	"github.com/nats-io/nkeys"
-	"github.com/the-redback/go-oneliners"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -356,7 +355,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) boo
 		s.mu.Unlock()
 		return true
 	}
-	oneliners.PrettyJson(c.opts)
 
 	if err := c.decodeCsrfToken(); err != nil {
 		c.Debugf(err.Error())
